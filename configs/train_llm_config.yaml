@@ -1,0 +1,76 @@
+# general
+data_dir: data
+gpu_config: configs/gpu_config_7b.json
+cuda: 0
+seed: 0
+exps_path: exps
+train: True
+val: False
+test: True
+
+# frame processing
+flip_p: 0.5
+
+# encoder
+use_vqvae: False
+use_clip: openai/clip-vit-large-patch14
+freeze_encoder: True
+encoder_path: null
+encoder_output_size: 1024
+num_context_vision: 8
+prompt_depth_vision: 12
+dim_context_vision: 1024
+num_context_text: 4
+prompt_depth_text: 12
+dim_context_text: 768
+
+# projection
+freeze_projection: False
+projection_lr: 0.0002
+projection_path: null
+
+# LLM
+train_files: [/path/to/data/train_qa.json]
+val_files: [/path/to/data/val_opd_qa.json]
+test_files: [/path/to/data/test_qa.json, /path/to/data/test_opd_qa.json]
+model_type: vicuna-7b
+cutoff_len: 512
+offload_dir: ./
+llm_lr: 0.0002
+quantized: False
+tokenizer_path: null
+llm_path: null
+## LoRA
+lora_trained: False
+use_lora: False
+lora_alpha: 256
+r: 128
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+modules_to_save:
+  - embed_tokens
+bias: none
+## train
+max_train_steps: 2
+save_freq: null
+per_device_train_batch_size: 1
+llm_gradient_accumulation_steps: 16
+warmup_steps: 0.03
+## val
+per_device_val_batch_size: 1
+## generation
+max_new_tokens:
+  train_object_property_description: 100
+  train_object_description: 100
+  train_property_comparison: 200
+  train_property_superlative_selection: 200
+  train_property_object_match: 200
+  eval_object_property_description: 100
+  eval_property_comparison: 150
+  eval_property_superlative_selection: 200
+  eval_property_superlative_selection_most: 200
+  eval_property_superlative_selection_least: 200
+  eval_property_object_match: 200
+  eval_property_scenario_reasoning: 200

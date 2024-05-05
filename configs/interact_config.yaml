@@ -1,0 +1,31 @@
+# general
+gpu_config: configs/gpu_config_7b.json
+cuda: 0
+seed: 0
+
+# encoder
+use_vqvae: False
+use_clip: openai/clip-vit-large-patch14
+encoder_output_size: 1024
+encoder_path: null
+num_context_vision: 8
+prompt_depth_vision: 12
+dim_context_vision: 1024
+num_context_text: 6
+prompt_depth_text: 12
+dim_context_text: 768
+
+# projection
+projection_path: null
+
+# LLM
+model_type: vicuna-7b
+quantized: False
+offload_dir: ./
+cutoff_len: 256
+lora_trained: True
+tokenizer_path: null
+llm_path: null
+
+# generation
+max_new_tokens: 300

@@ -1,0 +1,13 @@
+numpy
+opencv-python
+pillow
+torch
+tqdm
+natsort
+torchvision
+transformers==4.31.0
+peft==0.2.0
+python-dotenv
+sentencepiece
+protobuf
+bitsandbytes
