@@ -1,6 +1,6 @@
 # general
-gpu_config: configs/gpu_config_13b.json
-cuda: 1
+gpu_config: configs/gpu_config_7b.json
+cuda: 0
 seed: 0
 exps_path: exps
 
@@ -8,7 +8,7 @@ exps_path: exps
 use_vqvae: False
 use_clip: openai/clip-vit-large-patch14
 encoder_output_size: 1024
-encoder_path: /home/users/samson/octopi/exps/lora_256_128_vicuna-13b_3000/encoder.pt
+encoder_path: null
 num_context_vision: 8
 prompt_depth_vision: 12
 dim_context_vision: 1024
@@ -17,17 +17,17 @@ prompt_depth_text: 12
 dim_context_text: 768
 
 # projection
-projection_path: /home/users/samson/octopi/exps/lora_256_128_vicuna-13b_3000/project.pt
+projection_path: null
 
 # LLM
-test_files: [/home/users/samson/tactile-sensing-llm/data/psr_qa.json] # /home/users/samson/tactile-sensing-llm/robot/avocado_frames/avocado_qa.json
-model_type: vicuna-13b
+test_files: [/path/to/data/psr_qa.json] # /path/to/data/avocado_qa.json
+model_type: vicuna-7b
 quantized: False
 offload_dir: ./
 cutoff_len: 256
 lora_trained: True
-tokenizer_path: /home/users/samson/octopi/exps/lora_256_128_vicuna-13b_3000/tokenizer
-llm_path: /home/users/samson/octopi/exps/lora_256_128_vicuna-13b_3000/llm_weights
+tokenizer_path: null
+llm_path: null
 
 # generation
 max_new_tokens: 400
