@@ -40,14 +40,14 @@ def get_frames(dataset_path, frames_output_path):
             prev_frame = gray
 
         if movement_start != -1 and movement_end != -1 and movement_end - movement_start>=10:
-            os.makedirs(os.path.join(frames_output_path, f'feelang_{object_name}_{obj_sample_count[object_name]}'), exist_ok=True)
+            os.makedirs(os.path.join(frames_output_path, f'physiclear_{object_name}_{obj_sample_count[object_name]}'), exist_ok=True)
 
             cap.set(cv2.CAP_PROP_POS_FRAMES, movement_start-1)
             for i in range(movement_start-1, movement_end + 1):
                 ret, frame = cap.read()
                 if not ret:
                     break
-                frame_path = os.path.join(frames_output_path, f'feelang_{object_name}_{obj_sample_count[object_name]}', str(i).rjust(10, '0') + '.jpg')
+                frame_path = os.path.join(frames_output_path, f'physiclear_{object_name}_{obj_sample_count[object_name]}', str(i).rjust(10, '0') + '.jpg')
                 cv2.imwrite(frame_path, frame)
         cap.release()
 
@@ -83,13 +83,13 @@ def get_frames(dataset_path, frames_output_path):
         all_diffs = sorted(all_diffs, key=lambda t: t[0])
         all_diffs = [i[0] for i in all_diffs]
         if len(all_diffs) >= min_len:
-            os.makedirs(os.path.join(frames_output_path, f'feelang_{object_name}_{obj_sample_count[object_name]}'), exist_ok=True)
+            os.makedirs(os.path.join(frames_output_path, f'physiclear_{object_name}_{obj_sample_count[object_name]}'), exist_ok=True)
             for i in range(1, frame_number):
                 ret, frame = cap.read()
                 if not ret:
                     break
                 if i in all_diffs:
-                    frame_path = os.path.join(frames_output_path, f'feelang_{object_name}_{obj_sample_count[object_name]}', str(i).rjust(10, '0') + '.jpg')
+                    frame_path = os.path.join(frames_output_path, f'physiclear_{object_name}_{obj_sample_count[object_name]}', str(i).rjust(10, '0') + '.jpg')
                     cv2.imwrite(frame_path, frame)
         cap.release()
 
@@ -103,12 +103,12 @@ def get_frames(dataset_path, frames_output_path):
 
         cap = cv2.VideoCapture(dataset_file_path)
 
-        os.makedirs(os.path.join(frames_output_path, f'feelang_{object_name}_{obj_sample_count[object_name]}'), exist_ok=True)
+        os.makedirs(os.path.join(frames_output_path, f'physiclear_{object_name}_{obj_sample_count[object_name]}'), exist_ok=True)
         # for i in range(0, frame_number):
         i = 0
         while True:
             ret, frame = cap.read()
-            frame_path = os.path.join(frames_output_path, f'feelang_{object_name}_{obj_sample_count[object_name]}', str(i).rjust(10, '0') + '.jpg')
+            frame_path = os.path.join(frames_output_path, f'physiclear_{object_name}_{obj_sample_count[object_name]}', str(i).rjust(10, '0') + '.jpg')
             try:
                 cv2.imwrite(frame_path, frame)
             except:
