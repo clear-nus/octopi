@@ -1,5 +1,9 @@
 # Octopi: Object Property Reasoning with Large Tactile-Language Models
 
+[![preprint](https://img.shields.io/static/v1?label=arXiv&message=2405.02794&color=B31B1B)](https://arxiv.org/abs/2405.02794)
+[![Venue:RSS 2024](https://img.shields.io/badge/Venue-RSS%202024-007CFF)]
+
+
 <p align="center">
   <img src="./assets/framework.png" width="100%">
   <br />
