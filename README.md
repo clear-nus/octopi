@@ -14,7 +14,7 @@ ____
 
 This repository contains code for reproducing the experiments presented in "Octopi: Object Property Reasoning with Large Tactile-Language Models". In this paper, our first contribution is **PhysiCLeAR**, a GelSight tactile video dataset with physical property annotations and a natural language training and evaluation suite. 
 
-We further propose **Octopi**, a multimodal LLM that is grounded on tactile signals. It is trained to describe the texture and physical properties of objects based on tactile videos and align its physical understanding with PhysiCLeAR's physical property labels. Octopi is able to use these tactile descriptions for zero-shot scenario reasoning. Please check out the paper for more details and empirical results.
+We further propose **Octopi**, a multimodal LLM that is grounded on tactile signals. It is trained to describe the texture and physical properties of objects based on tactile videos and align its physical understanding with PhysiCLeAR's physical property labels. Octopi is able to use these tactile descriptions for scenario reasoning. Please check out the paper for more details and empirical results.
 
 <p align="center">
   <img src="./assets/model.png" width="80%">
@@ -37,7 +37,22 @@ $ python utils/process_dataset.py --dataset_path path/to/dataset --output_path p
 $ python utils/generate_qa.py --data_path path/to/processed/data  # Generate question-answer pairs for tactile feature alignment and end-to-end fine-tuning
 ```
 
-## Usage
+
+## Using Octopi's Weights
+To use Octopi's weights for training and/or evaluation, follow the steps below.
+
+1. Download the required weights (7b and/or 13b) from https://drive.google.com/drive/folders/1AdLCaD_5CiNvsm_cm6IT7KDeXgZVSQlY?usp=sharing.
+2. To use them for runs (excluding Encoder Pre-Training), change the following variables in the run's config files.
+```yaml
+model_type: vicuna-7b # Or vicuna-13b
+encoder_path: path/to/encoder.pt
+projection_path: path/to/project.pt
+tokenizer_path: path/to/tokenizer
+llm_path: path/to/llm_weights
+```
+
+
+## Training
 
 For the three main training procedures and two-step scenario reasoning, their respective config files can be found in `configs`.
 
@@ -252,7 +267,7 @@ max_new_tokens:
 python evaluate_llm.py --test_preds_path path/to/test_preds.json
 ```
 
-### Scenario Reasoning Results
+## Scenario Reasoning Evaluation
 These are currently evaluated manually. The scenario reasoning results will be saved as `test_preds.json` in the experiment folder when you run the following script.
 
 ```
@@ -294,7 +309,7 @@ llm_path: path/to/llm_weights # Your trained LLM
 max_new_tokens: 400
 ```
 
-### Interacting with Octopi
+## Interacting with Octopi
 ```
 python interact.py
 ```
