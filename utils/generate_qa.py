@@ -134,7 +134,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                 question = property_questions[question_type][qs][question_key].copy()
                 num_tactile = question.count("<img_tokens>")
                 # get relevant object(s) and their frames
-                sample = random.sample(samples.keys(), k=num_tactile)[0]
+                sample = random.sample(list(samples.keys()), k=num_tactile)[0]
                 tactile = [random.choice(samples[sample])]
                 answer = get_sample_description(sample, properties, use_unstructured)
                 if qs == 0:
@@ -152,7 +152,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
         elif question_type == f"{split}_property_comparison":
             num_tactile = 2
             # get relevant object(s) and their frames
-            all_samples = random.sample(samples.keys(), k=num_tactile)
+            all_samples = random.sample(list(samples.keys()), k=num_tactile)
             prop = random.choice(properties)
             for qs in range(question_steps):
                 question_key = random.choice(list(property_questions[question_type][qs].keys()))
