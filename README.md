@@ -3,6 +3,13 @@
 [![preprint](https://img.shields.io/static/v1?label=arXiv&message=2405.02794&color=B31B1B)](https://arxiv.org/abs/2405.02794)
 ![Venue:RSS 2024](https://img.shields.io/badge/Venue-RSS%202024-007CFF)
 
+**Note:** This is an older version of Octopi. Check out **Octopi 1.5** via the following links:
+- Github Repo: https://github.com/clear-nus/octopi-1.5
+- Paper: https://arxiv.org/abs/2507.09985 
+
+Or if you want Octopi 1.0, please see more below. 
+
+----
 
 <p align="center">
   <img src="./assets/framework.png" width="100%">
@@ -362,4 +369,5 @@ This repo contains code that's based on the following repos:
 
 ### References
 - https://jaotheboss.medium.com/domain-training-your-llm-6c77f53e3e27
+
 - https://pub.aimind.so/creating-sinusoidal-positional-embedding-from-scratch-in-pytorch-98c49e153d6
