@@ -27,6 +27,11 @@ def get_sample_description(sample, properties, use_unstructured):
 def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples, use_unstructured, use_properties):
     properties = ["hardness", "roughness", "texture"]
 
+    if "eval" in split:
+        prefix = "eval"
+    else:
+        prefix = split
+
     property_names = {
         "hardness": "hardness",
         "roughness": "roughness",
@@ -86,7 +91,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
         }
         if use_properties:
             property_questions["train_object_property_description"] = object_property_description
-    elif split == "eval":
+    elif "eval" in split:
         property_questions = {
             "eval_property_comparison": property_comparison,
             "eval_property_superlative_selection": property_superlative_selection,
@@ -112,15 +117,15 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
     # data
     all_data = []
 
-    if split == "eval":
+    if "eval" in split:
         existing = {
-            "eval_property_comparison": [],
-            "eval_property_superlative_selection": [],
-            "eval_property_object_match": []
+            f"{prefix}_property_comparison": [],
+            f"{prefix}_property_superlative_selection": [],
+            f"{prefix}_property_object_match": [],
         }
     
     for i in range(num_samples):
-        if split == "eval":
+        if "eval" in split:
             exist = False
         question_type = random.choice(list(property_questions.keys()))
         question_steps =  random.randint(1, len(property_questions[question_type]))
@@ -128,7 +133,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
             "question_type": question_type,
             "question_steps": question_steps
         }]
-        if question_type == f"{split}_object_property_description":
+        if question_type == f"{prefix}_object_property_description":
             for qs in range(question_steps):
                 question_key = random.choice(list(property_questions[question_type][qs].keys()))
                 question = property_questions[question_type][qs][question_key].copy()
@@ -149,7 +154,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                         "content": [answer],
                         "tactile": []
                     })
-        elif question_type == f"{split}_property_comparison":
+        elif question_type == f"{prefix}_property_comparison":
             num_tactile = 2
             # get relevant object(s) and their frames
             all_samples = random.sample(list(samples.keys()), k=num_tactile)
@@ -159,7 +164,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                 question = property_questions[question_type][qs][question_key].copy()
                 if "property_comparison_more" in question_key:
                     tactile = [random.choice(samples[i]) for i in all_samples]
-                    if split == "eval":
+                    if "eval" in split:
                         if (tactile[0], tactile[1], prop) in existing[question_type]:
                             exist = True
                             break
@@ -223,7 +228,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                         "content": [answer],
                         "tactile": []
                     })
-        elif question_type == f"{split}_property_superlative_selection":
+        elif question_type == f"{prefix}_property_superlative_selection":
             for qs in range(question_steps):
                 question_key = random.choice(list(property_questions[question_type][qs].keys()))
                 question = property_questions[question_type][qs][question_key].copy()
@@ -244,11 +249,11 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                 rank = RANKS[prop]
                 options = {0: "a)", 1: "b)", 2: "c)"}
                 if "property_superlative_selection_most" in question_key:
-                    max_rank = max(rank.values())
+                    max_rank = max([rank[s] for s in samples.keys()])
                     other_samples = random.sample([i for i in samples.keys() if rank[i] < max_rank], k=2)
                     target_sample = random.choice([i for i in samples.keys() if rank[i] == max_rank])
                 elif "property_superlative_selection_least" in question_key:
-                    min_rank = min(rank.values())
+                    min_rank = min([rank[s] for s in samples.keys()])
                     other_samples = random.sample([i for i in samples.keys() if rank[i] > min_rank], k=2)
                     target_sample = random.choice([i for i in samples.keys() if rank[i] == min_rank])
                 all_samples = [target_sample] + other_samples
@@ -263,7 +268,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                     answer += "Conclusion: "
                 answer += f"{options[target_idx]} is the {prop_description}."
                 tactile = [random.choice(samples[all_samples[i]]) for i in all_samples_shuffled_index]
-                if split == "eval":
+                if "eval" in split:
                     if (tactile[0], tactile[1], tactile[2], prop_description) in existing[question_type]:
                         exist = True
                         break
@@ -281,7 +286,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                         "content": [answer],
                         "tactile": []
                     })
-        elif question_type == f"{split}_property_object_match":
+        elif question_type == f"{prefix}_property_object_match":
             for qs in range(question_steps):
                 question_key = random.choice(list(property_questions[question_type][qs].keys()))
                 question = property_questions[question_type][qs][question_key].copy()
@@ -316,7 +321,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                     else:
                         question += [f"{obj_letter[i]} {OBJECTS[all_samples[shuffled_index]]}, "]
                 tactile = [random.choice(samples[i]) for i in all_samples]
-                if split == "eval":
+                if "eval" in split:
                     if (tactile[0], tactile[1], tactile[2]) in existing[question_type]:
                         exist = True
                         break
@@ -347,15 +352,17 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                         "content": [answer],
                         "tactile": []
                     })
-        if split == "eval":
+        if "eval" in split:
             if not exist:
                 all_data.append(data)
         else:
             all_data.append(data)
 
     # save all data
-    if split == "eval":
-        file_name = f"test_qa"
+    if split == "test_eval":
+        file_name = "test_qa"
+    elif split == "val_eval":
+        file_name = "val_qa"
     else:
         file_name = f"{split}_qa"
     if not use_properties:
@@ -1152,10 +1159,12 @@ if __name__ == "__main__":
     print("Generating QA...")
     # 1) training
     generate_one_step_qa(start_prompt, [train_json_path], args.data_path, "train", 10000, use_unstructured, use_properties)
-    # 2) evaluation
+    # 2) validation
     generate_opd_evaluation_qa(start_prompt, val_json_path, args.data_path, "val", use_unstructured)
+    generate_one_step_qa(start_prompt, [val_json_path], args.data_path, "val_eval", 1000, use_unstructured, use_properties)
+    # 3) testing
     generate_opd_evaluation_qa(start_prompt, test_json_path, args.data_path, "test", use_unstructured)
-    generate_one_step_qa(start_prompt, [test_json_path], args.data_path, "eval", 500, use_unstructured, use_properties)
+    generate_one_step_qa(start_prompt, [test_json_path], args.data_path, "test_eval", 500, use_unstructured, use_properties)
     generate_psr_evaluation_qa(start_prompt, [test_json_path], args.data_path, 50, use_unstructured, use_tactile)
     # 3) avocados
     # generate_opd_evaluation_qa(start_prompt, avocado_json_path, "/home/users/samson/tactile-sensing-llm/robot/avocado_frames", "avocado", use_unstructured)

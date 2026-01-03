@@ -2,10 +2,10 @@
 data_dir: data
 gpu_config: configs/gpu_config_7b.json
 cuda: 2
-seed: 0
+seed: 1
 exps_path: exps
 train: True
-val: False
+val: True
 test: True
 
 # frame processing
@@ -15,7 +15,7 @@ flip_p: 0.5
 use_vqvae: False
 use_clip: openai/clip-vit-large-patch14
 freeze_encoder: True
-encoder_path: /data/samson/octopi/exps/train_clip_seed_0/encoder.pt
+encoder_path: /data/samson/octopi/exps/train_clip_seed_1/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
 prompt_depth_vision: 12
@@ -26,12 +26,12 @@ dim_context_text: 768
 
 # projection
 freeze_projection: False
-projection_lr: 0.0002
+projection_lr: 0.00002
 projection_path: null
 
 # LLM
 train_files: [/data/samson/octopi/data/train_qa.json]
-val_files: []
+val_files: [/data/samson/octopi/data/val_opd_qa.json]
 test_files: [/data/samson/octopi/data/test_opd_qa.json, /data/samson/octopi/data/test_qa.json]
 model_type: vicuna-7b
 cutoff_len: 512
@@ -59,6 +59,7 @@ per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
 warmup_steps: 0.03
 ## val
+val_freq: 200
 per_device_val_batch_size: 1
 ## generation
 max_new_tokens:

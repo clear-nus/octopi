@@ -22,12 +22,27 @@ from transformers.utils import logging
 
 def add_new_tokens(llm, tokenizer, new_tokens):
     new_tokens = list(set(new_tokens) - set(tokenizer.vocab.keys()))
+    if len(new_tokens) == 0:
+        return
     n_new_tokens = tokenizer.add_tokens(new_tokens)
     print(f"{n_new_tokens} tokens added to tokenizer.")
     llm.resize_token_embeddings(len(tokenizer))
     with torch.no_grad():
         input_embeddings_avg = llm.model.embed_tokens.weight[:-n_new_tokens].mean(axis=0, keepdim=True)
         llm.model.embed_tokens.weight[-n_new_tokens:] = input_embeddings_avg
+
+
+def evaluate_loss(model, val_loader, device):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in tqdm.tqdm(val_loader, desc="Evaluating loss"):
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+            answer_tokens = answer_tokens.to(device)
+            outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+            total_loss += outputs.loss.item()
+    model.train()
+    return total_loss / len(val_loader)
 
 
 def train(configs, exp_name, g):
@@ -208,11 +223,10 @@ def train(configs, exp_name, g):
             param.requires_grad = True
         project_params = model.project.parameters()
         optimizer_project = torch.optim.AdamW(project_params, lr=configs["projection_lr"])
-        num_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
-        scheduler_project = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_project, T_max=num_steps)
 
     # training
     if configs["train"]:
+        best_val_loss = float('inf')
         # get trainable/non-trainable model parameter stats
         model.train()
         trainable_model_parameters = filter(lambda p: p.requires_grad, model.parameters())
@@ -241,12 +255,26 @@ def train(configs, exp_name, g):
                     optimizer_encoder.zero_grad()
                 if not configs["freeze_projection"]:
                     optimizer_project.step()
-                    scheduler_project.step()
                     optimizer_project.zero_grad()
                 if len(llm_params) > 0:
                     optimizer_llm.step()
                     scheduler_llm.step()
                     optimizer_llm.zero_grad()
+            
+            if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
+                if configs["val"]:
+                    val_loss = evaluate_loss(model, val_loader, device)
+                    print(f"Validation Loss: {val_loss}")
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        print(f"\nNew best validation loss: {best_val_loss}. Saving best model...")
+                        if len(llm_params) > 0:
+                            if configs["use_lora"]:
+                                model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/best_llm_weights")
+                            else:
+                                torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt")
+                        torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/best_project.pt")
+
             if configs["save_freq"] is not None:
                 if train_sample_step != 0 and (train_sample_step + 1) % configs["save_freq"] == 0:
                      # save models
@@ -276,40 +304,73 @@ def train(configs, exp_name, g):
             torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
             print(f"LLM training done!")
 
-    # validation
-    if configs["val"]:
-        print(f"\nEvaluating LLM on the validation set...")
-        model.eval()
-        preds = []
-        with torch.no_grad():
-            for val_sample_step, batch in enumerate(tqdm.tqdm(val_loader)):
-                # NOTE: hardcoded for batch size of 1
-                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
-                answer_tokens = answer_tokens.to(device)
-                outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-                max_new_tokens = configs["max_new_tokens"][question_type[0]]
-                generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
-                generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip() # https://huggingface.co/docs/transformers/main/llm_tutorial
-                generation = generation.strip().split("</s>")[0].strip()
-                if "</s>" not in generation:
-                    generation += "</s>"
-                answer_tokens = answer_tokens[0].cpu().numpy()
-                answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
-                preds.append({
-                    "question": "".join([i[0] for i in question]),
-                    "question_type": question_type[0],
-                    "question_step": question_step.item(),
-                    "sample_paths": [i[0] for i in tactile],
-                    "answer": answer,
-                    "generation": generation
-                })
-            with open(f'{configs["exps_path"]}/{exp_name}/val_preds.json', 'w') as f:
-                json.dump(preds, f, indent=4)
-                f.close()
-        print(f"LLM validation done!")
+    # # validation
+    # if configs["val"]:
+    #     print(f"\nEvaluating LLM on the validation set...")
+    #     model.eval()
+    #     preds = []
+    #     with torch.no_grad():
+    #         for val_sample_step, batch in enumerate(tqdm.tqdm(val_loader)):
+    #             # NOTE: hardcoded for batch size of 1
+    #             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+    #             answer_tokens = answer_tokens.to(device)
+    #             outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+    #             max_new_tokens = configs["max_new_tokens"][question_type[0]]
+    #             generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
+    #             generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip() # https://huggingface.co/docs/transformers/main/llm_tutorial
+    #             generation = generation.strip().split("</s>")[0].strip()
+    #             if "</s>" not in generation:
+    #                 generation += "</s>"
+    #             answer_tokens = answer_tokens[0].cpu().numpy()
+    #             answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
+    #             preds.append({
+    #                 "question": "".join([i[0] for i in question]),
+    #                 "question_type": question_type[0],
+    #                 "question_step": question_step.item(),
+    #                 "sample_paths": [i[0] for i in tactile],
+    #                 "answer": answer,
+    #                 "generation": generation
+    #             })
+    #         with open(f'{configs["exps_path"]}/{exp_name}/val_preds.json', 'w') as f:
+    #             json.dump(preds, f, indent=4)
+    #             f.close()
+    #     print(f"LLM validation done!")
 
     # test
     if configs["test"]:
+        # Reload best model if we just trained and validated
+        if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
+            print(f"\nReloading best model from validation for testing...")
+            
+            # Reload Projection
+            best_proj_path = f"{configs['exps_path']}/{exp_name}/best_project.pt"
+            if os.path.exists(best_proj_path):
+                print(f"Loading best projection from {best_proj_path}")
+                model.project.load_state_dict(torch.load(best_proj_path, map_location=device))
+            
+            # Reload LLM
+            if configs["use_lora"]:
+                best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
+                if os.path.exists(best_llm_path):
+                    print(f"Loading best LoRA adapters from {best_llm_path}")
+                    try:
+                        model.llm.load_adapter(best_llm_path, adapter_name="best_model")
+                        model.llm.set_adapter("best_model")
+                    except Exception as e:
+                        print(f"Could not load adapter using load_adapter: {e}. Trying manual state dict load.")
+                        # Fallback for older PEFT versions or specific configs
+                        from peft.utils import set_peft_model_state_dict
+                        adapter_path = os.path.join(best_llm_path, "adapter_model.bin")
+                        if os.path.exists(adapter_path):
+                            adapters_weights = torch.load(adapter_path, map_location=device)
+                            set_peft_model_state_dict(model.llm, adapters_weights)
+            else:
+                best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt"
+                if os.path.exists(best_llm_path):
+                    print(f"Loading best LLM weights from {best_llm_path}")
+                    llm_weights = torch.load(best_llm_path, map_location=device)
+                    model.llm.load_state_dict(llm_weights, strict=False)
+
         print(f"\nTesting LLM on the test set...")
         model.eval()
         preds = []

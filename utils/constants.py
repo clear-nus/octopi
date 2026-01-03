@@ -138,7 +138,7 @@ DESCRIPTIONS = {
         "The surface feels solid and rigid, exhibits a notable roughness and the surface has small bumps at certain parts.",
     ],
     'physiclear_blanket': [
-        "The surface feels compressible, its texture is notably smooth and there are no bumps or ridges.",
+        "The surface feels moderately compressible, its texture is notably smooth and there are no bumps or ridges.",
     ],
     'physiclear_strainer_base': [
         "The surface feels somewhat firm, exhibits a notable roughness and small bumps and raised areas are present.",
@@ -147,7 +147,7 @@ DESCRIPTIONS = {
         "The surface feels moderately solid and sturdy, exhibits a notable roughness and there are small bumps present.",
     ],
     'physiclear_paper_towel': [
-        "The surface feels moderately firm, exhibits a subtle roughness and small bumps are present.",
+        "The surface feels soft, exhibits a subtle roughness and small bumps are present.",
     ],
     'physiclear_scissor_blade': [
         "The surface feels hard and rigid, exhibits notable smoothness and there are no prominent bumps or ridges.",
@@ -159,10 +159,10 @@ DESCRIPTIONS = {
         "The surface feels hard, exhibits a notable roughness, and there are big bumps along the bristles.",
     ],
     'physiclear_microfiber_cloth': [
-        "The surface feels yielding, has a subtle roughness and there are small irregularities and bumps.",
+        "The surface feels somewhat yielding, has a subtle roughness and there are small irregularities and bumps.",
     ],
     'physiclear_millet': [
-        "The surface feels soft and yielding, exhibits a notable roughness and there are tiny bumps and irregularities present.",
+        "The surface feels moderately yielding, exhibits a notable roughness and there are tiny bumps and irregularities present.",
     ],
     'physiclear_strainer_handle': [
         "The surface feels solid and sturdy, lacks noticeable roughness, and there are no prominent bumps or ridges.",
@@ -180,7 +180,7 @@ DESCRIPTIONS = {
         "The surface feels moderately firm, exhibits a slight roughness and there are tiny bumps and ridges present.",
     ],
     'physiclear_water_bottle': [
-        "The surface feels yielding, lacks noticeable roughness and there are big bumps at some parts.",
+        "The surface feels somewhat yielding, lacks noticeable roughness and there are big bumps at some parts.",
     ],
     'physiclear_masking_tape': [
         "The surface feels firm, exhibits a slight roughness and there are small textural irregularities and fine ridges.",
@@ -198,10 +198,10 @@ DESCRIPTIONS = {
         "The surface feels soft, exhibits a notable roughness and there are tiny bumps and ridges present.",
     ],
     'physiclear_rubber_bands': [
-        "The surface feels somewhat firm and flexible, exhibits no roughness and there are big bumps on the surface.",
+        "The surface feels somewhat firm and flexible, exhibits a slight roughness and there are big bumps on the surface.",
     ],
     'physiclear_clothes_peg': [
-        "The surface feels hard and solid, exhibits a lack of roughness and there are no textural variations or fine ridges.",
+        "The surface feels hard and solid, exhibits a slight roughness and there are no textural variations or fine ridges.",
     ],
     'physiclear_tomato': [
         "The surface feels somewhat hard, lacks noticeable roughness and there are no textural variations or fine ridges.",
@@ -216,10 +216,10 @@ DESCRIPTIONS = {
         "The surface feels relatively firm, exhibits a slight roughness and there are small bumps and ridges present.",
     ],
     'physiclear_aluminium_foil': [
-        "The surface feels soft, exhibits no roughness and there are small imperfections and ridges.",
+        "The surface feels somewhat compressible, exhibits a slight roughness and there are small imperfections and ridges.",
     ],
     'physiclear_kiwi_kinda_ripe': [
-        "The surface feels soft, exhibits a prominent roughness and there are small, soft bumps and ridges present.",
+        "The surface feels moderately soft, exhibits a prominent roughness and there are small, soft bumps and ridges present.",
     ],
     'physiclear_wood_ruler': [
         "The surface feels solid and sturdy, lacks noticeable roughness and there are no textural variations.",
@@ -228,7 +228,7 @@ DESCRIPTIONS = {
         "The surface feels firm and somewhat flexible, is smooth and there are big bumps and ridges.",
     ],
     'physiclear_rice': [
-        "The surface feels yielding, has a notable roughness and there are many big bumps due to grains present.",
+        "The surface feels moderately yielding, has a notable roughness and there are many big bumps due to grains present.",
     ],
     'physiclear_rice_spatula_handle': [
         "The surface feels solid and sturdy, lacks noticeable roughness and there are no textural variations or fine ridges.",
@@ -237,13 +237,13 @@ DESCRIPTIONS = {
         "The surface feels solid and unyielding, lacks noticeable roughness and there are no textural variations or irregularities.",
     ],
     'physiclear_controller_keypad': [
-        "The surface feels solid and structured, exhibits no roughness and big bumps and raised areas are present at some parts.",
+        "The surface feels solid and structured, is slightly rough and big bumps and raised areas are present at some parts.",
     ],
     'physiclear_sponge_soft': [
         "The surface feels soft and yielding, exhibits a slight roughness and there are small prominent bumps present.",
     ],
     'physiclear_controller_buttons': [
-        "The surface feels solid and structured, exhibits no roughness and there are no textural variations or ridges.",
+        "The surface feels solid and structured, is slightly rough and there are no textural variations or ridges.",
     ],
     'physiclear_avocado_unripe': [
         "The surface feels firm and unyielding, exhibits a significant roughness and there are many small, firm bumps and ridges present.",
@@ -255,10 +255,10 @@ DESCRIPTIONS = {
         "The surface feels soft and flexible, exhibits a significant roughness and its exterior features small bumps.",
     ],
     'physiclear_mandarin_orange': [
-        "The surface feels soft, exhibits a slight roughness and there are tiny bumps present.",
+        "The surface feels moderately soft, exhibits a slight roughness and there are tiny bumps present.",
     ],
     'physiclear_bath_towel': [
-        "The surface feels soft and flexible, is notably rough and there are small bumps due to the weave.",
+        "The surface feels moderately soft and flexible, is notably rough and there are small bumps due to the weave.",
     ],
     'physiclear_oven_mitt': [
         "The surface feels relatively firm and sturdy, exhibits a notable roughness and there are subtle bumps and ridges.",
@@ -279,16 +279,16 @@ DESCRIPTIONS = {
         "The surface feels somewhat firm, exhibits a slight roughness and there are tiny textural variations due to the fibrous structure.",
     ],
     'physiclear_nylon_shirt': [
-        "The surface feels soft, lacks noticeable roughness and there are no prominent bumps or ridges.",
+        "The surface feels moderately compressible, has a slight roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_steel_wool': [
         "The surface feels soft and yielding, exhibits significant roughness and there are small bumps and ridges present.",
     ],
     'physiclear_toilet_brush_bristles': [
-        "The surface feels moderately firm, exhibits a notable roughness and there are small textural variations and fine ridges.",
+        "The surface feels yielding, exhibits a notable roughness and there are small textural variations and fine ridges.",
     ],
     'physiclear_gauze_pad': [
-        "The surface feels soft, exhibits a slight roughness and there are minor textural variations due to the weave.",
+        "The surface feels somewhat compressible, exhibits a slight roughness and there are minor textural variations due to the weave.",
     ],
     'physiclear_tennis_ball': [
         "The surface feels somewhat firm, exhibits a slight roughness and there are minor textural variations.",
@@ -303,10 +303,10 @@ DESCRIPTIONS = {
         "The surface feels solid and structured, lacks noticeable roughness and there are big bumps and raised areas at some parts.",
     ],
     'physiclear_toilet_brush_handle': [
-        "The surface feels solid and sturdy, lacks noticeable roughness and there are no prominent bumps or ridges.",
+        "The surface feels moderately solid, lacks noticeable roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_cotton_ball': [
-        "The surface feels soft and yielding, exhibits no roughness and there are no prominent bumps or ridges.",
+        "The surface feels soft and yielding, exhibits a slight roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_bread_knife_handle': [
         "The surface feels solid and structured, exhibits noticeable roughness and there are no prominent bumps or ridges.",
@@ -315,7 +315,7 @@ DESCRIPTIONS = {
         "The surface feels hard and solid, lacks noticeable roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_lanyard_card': [
-        "The surface feels solid and structured, lacks noticeable roughness, and raised areas are present at some parts.",
+        "The surface feels solid and structured, lacks noticeable roughness, and notable raised areas are present at some parts.",
     ],
     'physiclear_lanyard_string': [
         "The surface feels somewhat solid and structured, lacks noticeable roughness and there are small bumps and ridges.",
@@ -327,7 +327,7 @@ DESCRIPTIONS = {
         "The surface feels solid and structured, lacks noticeable roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_pen_pad': [
-        "The surface feels firm, lacks noticeable roughness and big bumps and raised areas are present at some parts.",
+        "The surface feels somewhat firm, is slightly rough and big bumps and raised areas are present at some parts.",
     ],
     'physiclear_basket': [
         "The surface feels solid and structured, exhibits a notable roughness and big bumps and raised areas are present at many parts.",
@@ -339,7 +339,7 @@ DESCRIPTIONS = {
         "The surface feels soft and yielding, lacks noticeable roughness and there are some small textural variations.",
     ],
     'physiclear_bubble_wrap': [
-        "The surface feels yielding, exhibits a notable roughness and there are big and distinct bumps.",
+        "The surface feels somewhat yielding, exhibits a notable roughness and there are big and distinct bumps.",
     ],
     "physiclear_avocado_1": [
         "The surface feels firm, exhibits a notable roughness and there are small and distinct bumps.",
