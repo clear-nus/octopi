@@ -1135,7 +1135,10 @@ def generate_object_evaluation_qa(start_prompt, json_path, data_path, split, num
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', help='directory to save processed frames and sample files')
+    parser.add_argument('--seed', type=int, default=0, help='random seed')
     args = parser.parse_args()
+
+    random.seed(args.seed)
 
     use_unstructured = True
     use_tactile = True

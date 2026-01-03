@@ -178,6 +178,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed(configs["seed"])
     torch.cuda.manual_seed_all(configs["seed"])
     # torch.use_deterministic_algorithms(True)
+    np.random.seed(configs["seed"])
     random.seed(configs["seed"])
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32

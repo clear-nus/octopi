@@ -187,7 +187,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_path', help='directory with tactile videos')
     parser.add_argument('--output_path', help='directory to save processed frames and sample files')
+    parser.add_argument('--seed', type=int, default=0, help='random seed')
     args = parser.parse_args()
+    
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    
     os.makedirs(args.output_path, exist_ok=True)
 
     # 1) get frames

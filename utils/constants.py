@@ -12,7 +12,7 @@ TRAIN_OBJECTS = [
     'physiclear_toothbrush_bristles', 'physiclear_tv_remote_buttons',
     'physiclear_rice', 'physiclear_aluminium_foil', 'physiclear_pen_base', 'physiclear_strainer_handle',
     'physiclear_wood_ruler', 'physiclear_egg', 'physiclear_controller_keypad', 'physiclear_cotton_ball', 'physiclear_toilet_paper',
-    'physiclear_masking_tape', 'physiclear_kiwi_kinda_ripe', 'physiclear_bread_knife_blade', 'physiclear_controller_base', 'physiclear_bubble_wrap', 'physiclear_ice_block', 'physiclear_clothes_peg','physiclear_pen_pad',
+    'physiclear_masking_tape', 'physiclear_kiwi_kinda_ripe', 'physiclear_bread_knife_blade', 'physiclear_controller_base', 'physiclear_bubble_wrap', 'physiclear_orange','physiclear_pen_pad', 'physiclear_eraser',
 ]
 
 VAL_OBJECTS = [
@@ -20,7 +20,7 @@ VAL_OBJECTS = [
 ]
 
 TEST_OBJECTS = [
-    'physiclear_orange', 'physiclear_microfiber_cloth', 'physiclear_hairbrush_handle', 'physiclear_toilet_brush_bristles', 'physiclear_hairbrush_bristles', 'physiclear_bath_towel', 'physiclear_eraser',
+    'physiclear_microfiber_cloth', 'physiclear_hairbrush_handle', 'physiclear_toilet_brush_bristles', 'physiclear_hairbrush_bristles', 'physiclear_bath_towel', 'physiclear_clothes_peg', 'physiclear_ice_block',
     # "physiclear_avocado_1",
     # "physiclear_avocado_2",
     # "physiclear_avocado_3",
@@ -279,7 +279,7 @@ DESCRIPTIONS = {
         "The surface feels somewhat firm, exhibits a slight roughness and there are tiny textural variations due to the fibrous structure.",
     ],
     'physiclear_nylon_shirt': [
-        "The surface feels soft, lacks noticeable roughness and there are small ridges present.",
+        "The surface feels soft, lacks noticeable roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_steel_wool': [
         "The surface feels soft and yielding, exhibits significant roughness and there are small bumps and ridges present.",
@@ -300,7 +300,7 @@ DESCRIPTIONS = {
         "The surface feels solid, lacks noticeable roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_toothbrush_handle': [
-        "The surface feels solid and structured, lacks noticeable roughness and there are small bumps and ridges presenting.",
+        "The surface feels solid and structured, lacks noticeable roughness and there are big bumps and raised areas at some parts.",
     ],
     'physiclear_toilet_brush_handle': [
         "The surface feels solid and sturdy, lacks noticeable roughness and there are no prominent bumps or ridges.",
@@ -315,7 +315,7 @@ DESCRIPTIONS = {
         "The surface feels hard and solid, lacks noticeable roughness and there are no prominent bumps or ridges.",
     ],
     'physiclear_lanyard_card': [
-        "The surface feels solid and structured, lacks noticeable roughness, and there are small bumps and ridges presenting.",
+        "The surface feels solid and structured, lacks noticeable roughness, and raised areas are present at some parts.",
     ],
     'physiclear_lanyard_string': [
         "The surface feels somewhat solid and structured, lacks noticeable roughness and there are small bumps and ridges.",
@@ -391,7 +391,7 @@ HARDNESS_RANK = {
     'physiclear_stress_ball': 0,
     'physiclear_feather_duster': 0,
     'physiclear_nylon_shirt': 1,
-    'physiclear_microfiber_cloth': 1, 
+    'physiclear_microfiber_cloth': 1,
     'physiclear_bath_towel': 1,
     'physiclear_gauze_pad': 1,
     'physiclear_sponge_rough': 1,
@@ -588,7 +588,7 @@ TEXTURE_RANK = {
     "physiclear_ice_block": 0,
     "physiclear_avocado_unripe": 1,
     "physiclear_sponge_rough": 1,
-    "physiclear_toothbrush_handle": 1,
+    "physiclear_toothbrush_handle": 2,
     "physiclear_oven_mitt": 1,
     "physiclear_toothbrush_bristles": 1,
     "physiclear_toilet_brush_bristles": 1,
@@ -597,14 +597,14 @@ TEXTURE_RANK = {
     "physiclear_steel_wool": 1,
     "physiclear_bread_knife_handle": 0,
     "physiclear_bread_knife_blade": 0,
-    "physiclear_lanyard_card": 1,
+    "physiclear_lanyard_card": 2,
     "physiclear_lanyard_string": 1,
     "physiclear_tennis_ball": 1,
     "physiclear_baseball": 0,
-    "physiclear_nylon_shirt": 1,
+    "physiclear_nylon_shirt": 0,
     "physiclear_denim": 1,
     "physiclear_pen_base": 0,
-    "physiclear_pen_pad": 1,
+    "physiclear_pen_pad": 2,
     "physiclear_gauze_pad": 1,
     "physiclear_basket": 2,
     "physiclear_stress_ball": 0,

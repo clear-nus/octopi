@@ -57,7 +57,11 @@ def train(configs, exp_name, g):
             tokenizer_path = configs["tokenizer_path"]
         if not configs["lora_trained"]:
             if configs["llm_path"] is not None:
-                model_path = configs["llm_path"]
+                if configs["llm_path"].endswith(".pt"):
+                    # if llm_path is a .pt file, we load the base model first
+                    pass
+                else:
+                    model_path = configs["llm_path"]
         with init_empty_weights():
             config = AutoConfig.from_pretrained(model_path)
             auto_model = AutoModelForCausalLM.from_config(config)
@@ -70,6 +74,7 @@ def train(configs, exp_name, g):
             auto_model, max_memory = gpu_max_mem_config, no_split_module_classes=["LLaMADecoderLayer", "LlamaDecoderLayer"]
         )
         if configs["lora_trained"]:
+            print("Loading LoRA trained model...")
             if configs["quantized"]:
                 llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"], quantization_config=bnb_config)
             else:
@@ -87,6 +92,14 @@ def train(configs, exp_name, g):
             else:
                 llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"])
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, padding_side="left")
+            
+            if len(tokenizer) > llm.get_input_embeddings().weight.shape[0]:
+                llm.resize_token_embeddings(len(tokenizer))
+
+            if configs["llm_path"] is not None and configs["llm_path"].endswith(".pt"):
+                print(f"Loading LLM weights from {configs['llm_path']}...")
+                llm_weights = torch.load(configs["llm_path"], map_location="cpu")
+                llm.load_state_dict(llm_weights, strict=False)
 
     # add new tokens
     if configs["tokenizer_path"] is None:
@@ -140,6 +153,7 @@ def train(configs, exp_name, g):
         model.llm = llm
     else:
         model.llm = llm
+
     if configs["train"]:
         ## LLM optimizer
         llm_params = []
@@ -156,6 +170,7 @@ def train(configs, exp_name, g):
             for name, param in model.llm.named_parameters():
                 if param.requires_grad:
                     llm_params.append(param)
+        print(f"len(llm_params): {len(llm_params)}")
         if len(llm_params) > 0:
             optimizer_llm = torch.optim.AdamW(llm_params, lr=configs["llm_lr"])
             num_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
@@ -163,15 +178,15 @@ def train(configs, exp_name, g):
 
     # 2) encoder setup
     if configs["use_vqvae"]:
-        model.encoder.load_state_dict(torch.load("encoders/vqvae/encoder.pth"))
-        model.vector_quantization.load_state_dict(torch.load("encoders/vqvae/vector_quantization.pth"))
+        model.encoder.load_state_dict(torch.load("encoders/vqvae/encoder.pth", map_location='cpu', weights_only=True))
+        model.vector_quantization.load_state_dict(torch.load("encoders/vqvae/vector_quantization.pth", map_location='cpu', weights_only=True))
     elif configs["encoder_path"] is not None:
         try:
-            model.encoder.load_state_dict(torch.load(configs["encoder_path"]))
+            model.encoder.load_state_dict(torch.load(configs["encoder_path"], map_location='cpu', weights_only=True))
         except RuntimeError:
             clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
             model.encoder.model.vision_model = clip.vision_model
-            model.encoder.load_state_dict(torch.load(configs["encoder_path"]), strict=False)
+            model.encoder.load_state_dict(torch.load(configs["encoder_path"], map_location='cpu', weights_only=True), strict=True)
     if configs["freeze_encoder"]:
         for name, param in model.encoder.named_parameters():
             param.requires_grad = False
@@ -183,7 +198,7 @@ def train(configs, exp_name, g):
 
     # 3) projection setup
     if configs["projection_path"] is not None:
-        projection_dict = torch.load(configs["projection_path"])
+        projection_dict = torch.load(configs["projection_path"], map_location='cpu', weights_only=True)
         model.project.load_state_dict(projection_dict)
     if configs["freeze_projection"]:
         for name, param in model.project.named_parameters():
@@ -193,6 +208,8 @@ def train(configs, exp_name, g):
             param.requires_grad = True
         project_params = model.project.parameters()
         optimizer_project = torch.optim.AdamW(project_params, lr=configs["projection_lr"])
+        num_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
+        scheduler_project = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_project, T_max=num_steps)
 
     # training
     if configs["train"]:
@@ -224,6 +241,7 @@ def train(configs, exp_name, g):
                     optimizer_encoder.zero_grad()
                 if not configs["freeze_projection"]:
                     optimizer_project.step()
+                    scheduler_project.step()
                     optimizer_project.zero_grad()
                 if len(llm_params) > 0:
                     optimizer_llm.step()
@@ -234,9 +252,12 @@ def train(configs, exp_name, g):
                      # save models
                     print("Saving tokenizer and models...")
                     tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer_{train_sample_step + 1}")
-                    model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}")
-                    # if configs["newton"] is False:
-                    torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder_{train_sample_step + 1}.pt")
+                    if len(llm_params) > 0:
+                        if configs["use_lora"]:
+                            model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}")
+                        else:
+                            torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}.pt")
+                    # torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder_{train_sample_step + 1}.pt")
                     torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project_{train_sample_step + 1}.pt")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
@@ -246,9 +267,12 @@ def train(configs, exp_name, g):
             tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
             model.llm.generation_config.temperature = None
             model.llm.generation_config.top_p = None
-            model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
-            # if configs["newton"] is False:
-            torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
+            if len(llm_params) > 0:
+                if configs["use_lora"]:
+                    model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
+                else:
+                    torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights.pt")
+            # torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
             torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
             print(f"LLM training done!")
 
@@ -334,7 +358,12 @@ if __name__ == "__main__":
     exp_type = exp_type + f"_{configs['model_type']}"
     if configs["train"]:
         exp_type += f"_{configs['max_train_steps']}"
-    exp_id = input("Identifier for experiment: ")
+    
+    if "EXP_ID" in os.environ:
+        exp_id = os.environ["EXP_ID"]
+    else:
+        exp_id = input("Identifier for experiment: ")
+        
     if len(exp_id) > 0:
         exp_id = exp_type + f"_{exp_id}"
     else:
@@ -361,6 +390,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed(configs["seed"])
     torch.cuda.manual_seed_all(configs["seed"])
     # torch.use_deterministic_algorithms(True)
+    np.random.seed(configs["seed"])
     random.seed(configs["seed"])
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
