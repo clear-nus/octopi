@@ -14,7 +14,7 @@ class CLIPTactileEncoder(nn.Module):
         tactile_embeds = tactile_embeds.reshape(b * l, c, h, w) # (b * l, c, h, w)
         tactile_forward_outs = self.model(tactile_embeds, output_hidden_states=True)
         # pooled output
-        tactile_features = tactile_forward_outs.hidden_states[-1][:, 0].to(tactile_embeds.dtype) # (b * l, patch_embed_size)
+        tactile_features = tactile_forward_outs.pooler_output.to(tactile_embeds.dtype) # (b * l, patch_embed_size)
         _, patch_embed_size = tactile_features.shape
         tactile_features = tactile_features.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
         return tactile_features
@@ -123,16 +123,25 @@ class MultimodalLLMForCausalLM(nn.Module):
         # 1) question embeds
         question_embeds = []
         img_token_count = 0
-        for chunk in question:
+        for i, chunk in enumerate(question):
             chunk = chunk[0]
             if "img_tokens" in chunk:
+                if i == 0:
+                    # if the first chunk is an image, we need to add a BOS token
+                    bos_token = torch.tensor([self.tokenizer.bos_token_id], dtype=torch.int64).to(self.device)
+                    bos_embed = self.llm.get_input_embeddings()(bos_token)
+                    bos_embed = torch.unsqueeze(bos_embed, dim=0)
+                    question_embeds.append(bos_embed)
                 visual_embeds = self.encoder(tactile_frames[img_token_count].to(self.device))
                 idx = [all_indices[img_token_count]]
                 sinusoidal_embeds = sinusoidal_positional_embedding(token_sequence_size=5, indices=idx, token_embedding_dim=1024, batch_size=visual_embeds.shape[0]).to(visual_embeds.device)
                 chunk_embeds = self.project(visual_embeds + sinusoidal_embeds)
                 img_token_count += 1
             else:
-                chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64)[1:].to(self.device))
+                if i == 0:
+                    chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64).to(self.device))
+                else:
+                    chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64)[1:].to(self.device))
                 chunk_embeds = torch.unsqueeze(chunk_embeds, dim=0)
             question_embeds.append(chunk_embeds)
         question_embeds = torch.cat(question_embeds, dim=1)

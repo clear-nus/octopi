@@ -229,6 +229,10 @@ def train(configs, exp_name, g):
         best_val_loss = float('inf')
         # get trainable/non-trainable model parameter stats
         model.train()
+        if configs["freeze_encoder"]:
+            model.encoder.eval()
+        if configs["freeze_projection"]:
+            model.project.eval()
         trainable_model_parameters = filter(lambda p: p.requires_grad, model.parameters())
         trainable_params = sum([np.prod(p.size()) for p in trainable_model_parameters])
         all_params = sum([np.prod(p.size()) for p in model.parameters()])
@@ -264,6 +268,10 @@ def train(configs, exp_name, g):
             if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
                 if configs["val"]:
                     val_loss = evaluate_loss(model, val_loader, device)
+                    if configs["freeze_encoder"]:
+                        model.encoder.eval()
+                    if configs["freeze_projection"]:
+                        model.project.eval()
                     print(f"Validation Loss: {val_loss}")
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
@@ -274,6 +282,8 @@ def train(configs, exp_name, g):
                             else:
                                 torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt")
                         torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/best_project.pt")
+                        if not configs["freeze_encoder"]:
+                            torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
 
             if configs["save_freq"] is not None:
                 if train_sample_step != 0 and (train_sample_step + 1) % configs["save_freq"] == 0:
@@ -285,7 +295,8 @@ def train(configs, exp_name, g):
                             model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}")
                         else:
                             torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}.pt")
-                    # torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder_{train_sample_step + 1}.pt")
+                    if not configs["freeze_encoder"]:
+                        torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder_{train_sample_step + 1}.pt")
                     torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project_{train_sample_step + 1}.pt")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
@@ -295,12 +306,13 @@ def train(configs, exp_name, g):
             tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
             model.llm.generation_config.temperature = None
             model.llm.generation_config.top_p = None
-            if len(llm_params) > 0:
-                if configs["use_lora"]:
-                    model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
-                else:
-                    torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights.pt")
-            # torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
+            # if len(llm_params) > 0:
+            #     if configs["use_lora"]:
+            #         model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
+            #     else:
+            #         torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights.pt")
+            if not configs["freeze_encoder"]:
+                torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
             torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
             print(f"LLM training done!")
 
@@ -348,6 +360,13 @@ def train(configs, exp_name, g):
                 print(f"Loading best projection from {best_proj_path}")
                 model.project.load_state_dict(torch.load(best_proj_path, map_location=device))
             
+            # Reload Encoder
+            if not configs["freeze_encoder"]:
+                best_encoder_path = f"{configs['exps_path']}/{exp_name}/best_encoder.pt"
+                if os.path.exists(best_encoder_path):
+                    print(f"Loading best encoder from {best_encoder_path}")
+                    model.encoder.load_state_dict(torch.load(best_encoder_path, map_location=device))
+
             # Reload LLM
             if configs["use_lora"]:
                 best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
@@ -442,7 +461,7 @@ if __name__ == "__main__":
         file.close()
 
     # log outputs
-    sys.stdout = open(f"{configs['exps_path']}/{exp_name}/log.txt", 'w')
+    sys.stdout = open(f"{configs['exps_path']}/{exp_name}/log.txt", 'w', buffering=1)
     logging.set_verbosity_error()
 
     # seed

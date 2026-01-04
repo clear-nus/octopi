@@ -1161,7 +1161,7 @@ if __name__ == "__main__":
     generate_one_step_qa(start_prompt, [train_json_path], args.data_path, "train", 10000, use_unstructured, use_properties)
     # 2) validation
     generate_opd_evaluation_qa(start_prompt, val_json_path, args.data_path, "val", use_unstructured)
-    generate_one_step_qa(start_prompt, [val_json_path], args.data_path, "val_eval", 1000, use_unstructured, use_properties)
+    generate_one_step_qa(start_prompt, [val_json_path], args.data_path, "val_eval", 500, use_unstructured, use_properties)
     # 3) testing
     generate_opd_evaluation_qa(start_prompt, test_json_path, args.data_path, "test", use_unstructured)
     generate_one_step_qa(start_prompt, [test_json_path], args.data_path, "test_eval", 500, use_unstructured, use_properties)

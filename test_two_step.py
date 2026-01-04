@@ -37,10 +37,20 @@ def sinusoidal_positional_embedding(token_sequence_size, indices, token_embeddin
 
 def process_user_input(user_input, image_processor, model, tokenizer, device):
     question_embeds = []
-    for chunk in user_input:
+    for i, chunk in enumerate(user_input):
         if "[" not in chunk:
-            question_embeds.append(model.llm.get_input_embeddings()(torch.unsqueeze(torch.tensor(tokenizer.encode(chunk))[1:], 0).to(device)))
+            if i == 0:
+                # Keep BOS token for the first chunk
+                question_embeds.append(model.llm.get_input_embeddings()(torch.unsqueeze(torch.tensor(tokenizer.encode(chunk)), 0).to(device)))
+            else:
+                question_embeds.append(model.llm.get_input_embeddings()(torch.unsqueeze(torch.tensor(tokenizer.encode(chunk))[1:], 0).to(device)))
         else:
+            if i == 0:
+                # Add BOS token if the first chunk is an image
+                bos_token = torch.tensor([tokenizer.bos_token_id], dtype=torch.int64).to(device)
+                bos_embed = model.llm.get_input_embeddings()(bos_token)
+                bos_embed = torch.unsqueeze(bos_embed, dim=0)
+                question_embeds.append(bos_embed)
             question_embeds.append(model.llm.get_input_embeddings()(torch.unsqueeze(torch.tensor(tokenizer.encode("<tact_start>"))[1:], 0).to(device)))
             frames, indices = get_frames(chunk[1:-1], image_processor, None, return_indices=True)
             tactile_tensors = torch.unsqueeze(frames, dim=0).to(device) # (1, l, c, h, w)

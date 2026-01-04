@@ -12,11 +12,11 @@ TRAIN_OBJECTS = [
     'physiclear_toothbrush_bristles', 'physiclear_tv_remote_buttons',
     'physiclear_rice', 'physiclear_aluminium_foil', 'physiclear_pen_base', 'physiclear_strainer_handle',
     'physiclear_wood_ruler', 'physiclear_egg', 'physiclear_controller_keypad', 'physiclear_cotton_ball', 'physiclear_toilet_paper',
-    'physiclear_masking_tape', 'physiclear_kiwi_kinda_ripe', 'physiclear_bread_knife_blade', 'physiclear_controller_base', 'physiclear_bubble_wrap', 'physiclear_orange','physiclear_pen_pad', 'physiclear_eraser',
+    'physiclear_masking_tape', 'physiclear_kiwi_kinda_ripe', 'physiclear_bread_knife_blade', 'physiclear_controller_base', 'physiclear_orange','physiclear_pen_pad', 'physiclear_eraser', 'physiclear_lemon'
 ]
 
 VAL_OBJECTS = [
-    'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_lemon'
+    'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap'
 ]
 
 TEST_OBJECTS = [
