@@ -148,7 +148,7 @@ def main(configs):
         prompt_pre = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: "
         prompt_pre_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_pre))[1:], 0).to(device) # NOTE: remove BOS token
         prompt_pre_embeds = llm.get_input_embeddings()(prompt_pre_tokens)
-        prompt_post = f"\nASSISTANT:"
+        prompt_post = f" ASSISTANT:"
         prompt_post_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_post))[1:], 0).to(device) # NOTE: remove BOS token
         prompt_post_embeds = llm.get_input_embeddings()(prompt_post_tokens)
         question_embeds = process_user_input(user_input, image_processor, model, tokenizer, device)
@@ -169,13 +169,13 @@ def main(configs):
 
         while len(user_input) > 0 and user_input.strip() != "exit":
             if user_input == "restart":
-                prompt_pre = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n"
+                prompt_pre = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
                 prompt_pre_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_pre))[1:], 0).to(device) # NOTE: remove BOS token
                 prompt_pre_embeds = llm.get_input_embeddings()(prompt_pre_tokens)
                 prev_embeds = prompt_pre_embeds
                 user_input = input("\n[Enter 'exit' to quit, 'restart' to restart, '[frames_path]' to input a sequence of frames]\n\nA chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: ")
             else:
-                prompt_pre = "\nUSER: "
+                prompt_pre = "USER: "
                 prompt_pre_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_pre))[1:], 0).to(device) # NOTE: remove BOS token
                 prompt_pre_embeds = llm.get_input_embeddings()(prompt_pre_tokens)
                 prev_embeds = torch.cat([prev_embeds, prompt_pre_embeds], dim=1)

@@ -8,9 +8,40 @@ import csv
 import natsort
 from PIL import Image
 from torchvision import transforms
+import torchvision.transforms.functional as TF
 import random
 import json
 from utils.constants import *
+
+
+def simulate_directional_lighting(img, r_factor, g_factor, b_factor):
+    """
+    Simulates changes in directional lighting for GelSight sensors by scaling 
+    RGB channels independently. This mimics variations in LED intensity.
+    """
+    bands = img.split()
+    if len(bands) >= 3:
+        r, g, b = bands[0], bands[1], bands[2]
+        r = TF.adjust_brightness(r, r_factor)
+        g = TF.adjust_brightness(g, g_factor)
+        b = TF.adjust_brightness(b, b_factor)
+        return Image.merge("RGB", (r, g, b))
+    return img
+
+
+def horizontal_flip_with_color_swap(img):
+    """
+    Flips image horizontally and swaps Red/Blue channels.
+    ASSUMPTION: Sensor has symmetric Red (Right) and Blue (Left) lighting.
+    If your sensor is triangular (e.g. GelSight Mini), this is physically incorrect.
+    """
+    img = TF.hflip(img)
+    bands = img.split()
+    if len(bands) >= 3:
+        r, g, b = bands[0], bands[1], bands[2]
+        # Swap Red and Blue
+        return Image.merge("RGB", (b, g, r))
+    return img
 
 
 def get_frames(frames_path, image_processor, transforms_image, max_length=5, skip=True, return_indices=False):
@@ -26,10 +57,10 @@ def get_frames(frames_path, image_processor, transforms_image, max_length=5, ski
     
     for frame in all_obj_sample_frames:
         if image_processor is not None:
+            img = Image.open(frame).convert('RGB')
             if transforms_image is not None:
-                tactile_tensors.append(transforms_image(image_processor.preprocess(Image.open(frame).convert('RGB'), return_tensors='pt')['pixel_values'][0]))
-            else:
-                tactile_tensors.append(image_processor.preprocess(Image.open(frame).convert('RGB'), return_tensors='pt')['pixel_values'][0])
+                img = transforms_image(img)
+            tactile_tensors.append(image_processor.preprocess(img, return_tensors='pt')['pixel_values'][0])
     
     tactile_tensors = torch.stack(tactile_tensors, dim=0) # (l, c, h, w)
 
@@ -96,14 +127,27 @@ class CLIPPropertyUniqueDataset(Dataset):
         # load tactile info
         transform_list = []
         if self.split_name == "train":
+            # GelSight Mini Layout (From Photo): Top(Green), Right(Red), Left(Blue).
             if random.random() < self.flip_p:
-                transform_list.append(transforms.RandomHorizontalFlip(1))
-            if random.random() < self.flip_p:
-                transform_list.append(transforms.RandomVerticalFlip(1))
-        if len(transform_list) == 0:
-            transforms_image = None
-        else:
+                transform_list.append(transforms.Lambda(lambda img: horizontal_flip_with_color_swap(img)))
+            # Small rotations (+/- 15 deg) are okay.
+            if random.random() < 0.5:
+                angle = random.uniform(-15, 15)
+                transform_list.append(transforms.Lambda(lambda img, a=angle: TF.rotate(img, a)))
+            if random.random() < 0.5:
+                brightness = random.uniform(0.9, 1.1)
+                contrast = random.uniform(0.9, 1.1)
+                transform_list.append(transforms.Lambda(lambda img, b=brightness: TF.adjust_brightness(img, b)))
+                transform_list.append(transforms.Lambda(lambda img, c=contrast: TF.adjust_contrast(img, c)))
+            if random.random() < 0.5:
+                # Directional Lighting: Scale RGB channels independently
+                r_f = random.uniform(0.8, 1.2)
+                g_f = random.uniform(0.8, 1.2)
+                b_f = random.uniform(0.8, 1.2)
+                transform_list.append(transforms.Lambda(lambda img, r=r_f, g=g_f, b=b_f: simulate_directional_lighting(img, r, g, b)))
             transforms_image = transforms.Compose(transform_list)
+        else:
+            transforms_image = None
         objects_tactile_frames, hardness_label, roughness_label, texture_label, all_indices = self.get_frames_and_label(index, transforms_image=transforms_image)
         return objects_tactile_frames, hardness_label, roughness_label, texture_label, all_indices
 
@@ -136,10 +180,24 @@ class TactileLLMDataset(Dataset):
         # NOTE: ignore BOS tokens
         transform_list = []
         if self.split_name == "train":
+            # GelSight Mini Layout (From Photo): Top(Green), Right(Red), Left(Blue).
             if random.random() < self.flip_p:
-                transform_list.append(transforms.RandomHorizontalFlip(1))
-            if random.random() < self.flip_p:
-                transform_list.append(transforms.RandomVerticalFlip(1))
+                transform_list.append(transforms.Lambda(lambda img: horizontal_flip_with_color_swap(img)))
+            # Small rotations (+/- 15 deg) are okay.
+            if random.random() < 0.5:
+                angle = random.uniform(-15, 15)
+                transform_list.append(transforms.Lambda(lambda img, a=angle: TF.rotate(img, a)))
+            if random.random() < 0.5:
+                brightness = random.uniform(0.9, 1.1)
+                contrast = random.uniform(0.9, 1.1)
+                transform_list.append(transforms.Lambda(lambda img, b=brightness: TF.adjust_brightness(img, b)))
+                transform_list.append(transforms.Lambda(lambda img, c=contrast: TF.adjust_contrast(img, c)))
+            if random.random() < 0.5:
+                # Directional Lighting: Scale RGB channels independently
+                r_f = random.uniform(0.8, 1.2)
+                g_f = random.uniform(0.8, 1.2)
+                b_f = random.uniform(0.8, 1.2)
+                transform_list.append(transforms.Lambda(lambda img, r=r_f, g=g_f, b=b_f: simulate_directional_lighting(img, r, g, b)))
             transforms_image = transforms.Compose(transform_list)
         else:
             transforms_image = None
@@ -148,13 +206,30 @@ class TactileLLMDataset(Dataset):
         question_step = sample[0]["question_steps"]
         question = []
         tactile = []
-        for s in sample[1:-1]:
+        for s in sample[:-1]:
             if s["role"] == "ASSISTANT":
-                question += [s["role"]] + [": "] + s["content"] + [f"{self.eos_token}\n"]
-            else:
-                question += [s["role"]] + [": "] + s["content"] + ["\n"]
+                question += [s["role"]] + [": "] + s["content"] + [f"{self.eos_token}"]
+            elif s["role"] == "USER":
+                question += [s["role"]] + [": "] + s["content"] + [" "]
+            elif s["role"] == "SYSTEM":
+                question += [s["content"] + " "]
             tactile += s["tactile"]
         question += ["ASSISTANT: "]
+        # Merge adjacent text chunks to avoid tokenization artifacts
+        merged_question = []
+        current_text = ""
+        for item in question:
+            if "img_tokens" in item:
+                if current_text:
+                    merged_question.append(current_text)
+                    current_text = ""
+                merged_question.append(item)
+            else:
+                current_text += item
+        if current_text:
+            merged_question.append(current_text)
+        question = merged_question
+        print(question)
         answer = "".join(sample[-1]["content"])
         # 2) get tokens
         answer_tokens = torch.tensor(self.tokenizer.encode(answer + f'{self.eos_token}'), dtype=torch.int64)[1:]

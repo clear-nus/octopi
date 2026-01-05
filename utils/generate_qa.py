@@ -143,7 +143,12 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                 tactile = [random.choice(samples[sample])]
                 answer = get_sample_description(sample, properties, use_unstructured)
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -217,7 +222,12 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                         else:
                             answer = f"Both objects are similar in terms of {property_names[prop]}."
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -275,7 +285,12 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                     else:
                         existing[question_type].append((tactile[0], tactile[1], tactile[2], prop_description))
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -341,7 +356,12 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                 answer += f"b) is {OBJECTS[all_samples[1]]} and "
                 answer += f"c) is {OBJECTS[all_samples[2]]}."
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -401,7 +421,12 @@ def generate_opd_evaluation_qa(start_prompt, json_path, data_path, split, use_un
             tactile = i[1]
             answer = get_sample_description(sample, properties, use_unstructured)
             if qs == 0:
-                question.insert(0, start_prompt)
+                data.append({
+                    "role": "SYSTEM",
+                    "content": start_prompt,
+                    "tactile": []
+                })
+                # question.insert(0, start_prompt)
             data.append({
                     "role": "USER",
                     "content": question,
@@ -593,7 +618,12 @@ def generate_psr_evaluation_qa(start_prompt, json_path, data_path, num_samples, 
                     if chunk == "<scenario_question>":
                         question[question_index] = scenario_question
             if qs == 0:
-                question.insert(0, start_prompt)
+                data.append({
+                    "role": "SYSTEM",
+                    "content": start_prompt,
+                    "tactile": []
+                })
+                # question.insert(0, start_prompt)
             data.append({
                     "role": "USER",
                     "content": question,
@@ -775,7 +805,12 @@ def generate_avocado_evaluation_qa(start_prompt, json_path, data_path, num_sampl
                     if chunk == "<scenario_question>":
                         question[question_index] = scenario_question
             if qs == 0:
-                question.insert(0, start_prompt)
+                data.append({
+                    "role": "SYSTEM",
+                    "content": start_prompt,
+                    "tactile": []
+                })
+                # question.insert(0, start_prompt)
             data.append({
                     "role": "USER",
                     "content": question,
@@ -910,7 +945,12 @@ def generate_object_evaluation_qa(start_prompt, json_path, data_path, split, num
                 tactile = [random.choice(samples[sample])]
                 answer = get_sample_description(sample, properties, use_unstructured)
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -984,7 +1024,12 @@ def generate_object_evaluation_qa(start_prompt, json_path, data_path, split, num
                         else:
                             answer = f"Both objects are similar in terms of {property_names[prop]}."
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -1042,7 +1087,12 @@ def generate_object_evaluation_qa(start_prompt, json_path, data_path, split, num
                     else:
                         existing[question_type].append((tactile[0], tactile[1], tactile[2], prop_description))
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -1108,7 +1158,12 @@ def generate_object_evaluation_qa(start_prompt, json_path, data_path, split, num
                 answer += f"b) is {OBJECTS[all_samples[1]]} and "
                 answer += f"c) is {OBJECTS[all_samples[2]]}."
                 if qs == 0:
-                    question.insert(0, start_prompt)
+                    data.append({
+                        "role": "SYSTEM",
+                        "content": start_prompt,
+                        "tactile": []
+                    })
+                    # question.insert(0, start_prompt)
                 data.append({
                         "role": "USER",
                         "content": question,
@@ -1151,7 +1206,8 @@ if __name__ == "__main__":
     use_tactile = True
     use_properties = True
     # create question-answer pairs for each split
-    start_prompt = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n"
+    # start_prompt = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n"
+    start_prompt = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
     train_json_path = os.path.join(args.data_path, "train_samples.json")
     val_json_path = os.path.join(args.data_path, "val_samples.json")
     test_json_path = os.path.join(args.data_path, "test_samples.json")

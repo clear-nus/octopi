@@ -1,20 +1,15 @@
-# general
 data_dir: data
 gpu_config: configs/gpu_config_7b.json
 cuda: 2
 seed: 0
 exps_path: exps
-train: True
-val: True
-test: True
-
-# frame processing
+train: true
+val: true
+test: true
 flip_p: 0.5
-
-# encoder
-use_vqvae: False
+use_vqvae: false
 use_clip: openai/clip-vit-large-patch14
-freeze_encoder: True
+freeze_encoder: true
 encoder_path: /data/samson/octopi/exps/train_clip_seed_0/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
@@ -23,45 +18,43 @@ dim_context_vision: 1024
 num_context_text: 4
 prompt_depth_text: 12
 dim_context_text: 768
-
-# projection
-freeze_projection: False
-projection_lr: 0.00002
+freeze_projection: false
+projection_lr: 2.0e-05
 projection_path: null
-
-# LLM
-train_files: [/data/samson/octopi/data/train_qa.json]
-val_files: [/data/samson/octopi/data/val_opd_qa.json, /data/samson/octopi/data/val_qa.json]
-test_files: [/data/samson/octopi/data/test_opd_qa.json, /data/samson/octopi/data/test_qa.json]
+train_files:
+- /data/samson/octopi/data/train_qa.json
+val_files:
+- /data/samson/octopi/data/val_opd_qa.json
+- /data/samson/octopi/data/val_qa.json
+test_files:
+- /data/samson/octopi/data/test_opd_qa.json
+- /data/samson/octopi/data/test_qa.json
 model_type: vicuna-7b
 cutoff_len: 512
 offload_dir: ./
-llm_lr: 0.0001 # 0.0002
-quantized: False
+llm_lr: 0.0002
+quantized: false
 tokenizer_path: null
 llm_path: null
-## LoRA
-lora_trained: False
-use_lora: False
-lora_alpha: 32 # 256
-r: 16 # 128
-lora_dropout: 0.05
+lora_trained: false
+use_lora: false
+lora_alpha: 32
+r: 16
+lora_dropout: 0.1
 target_modules:
-  - q_proj
-  - k_proj
+- q_proj
+- k_proj
+- v_proj
 modules_to_save:
-  - embed_tokens
+- embed_tokens
 bias: none
-## train
 max_train_steps: 6000
 save_freq: null
 per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
 warmup_steps: 0.03
-## val
-val_freq: 200
+val_freq: 400
 per_device_val_batch_size: 1
-## generation
 max_new_tokens:
   train_object_property_description: 100
   train_object_description: 100

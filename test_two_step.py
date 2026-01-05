@@ -156,7 +156,7 @@ def main(configs, exp_name):
                         prompt_pre = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: "
                         prompt_pre_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_pre))[1:], 0).to(device) # NOTE: remove BOS token
                         prompt_pre_embeds_start = llm.get_input_embeddings()(prompt_pre_tokens)
-                        prompt_post = f"\nASSISTANT:"
+                        prompt_post = f" ASSISTANT:"
                         prompt_post_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_post))[1:], 0).to(device) # NOTE: remove BOS token
                         prompt_post_embeds = llm.get_input_embeddings()(prompt_post_tokens)
                         user_input = d[1]["content"]
@@ -181,7 +181,7 @@ def main(configs, exp_name):
                         generation_embeds = llm.get_input_embeddings()(generation_tokens)
                         prev_embeds = torch.cat([prev_embeds, generation_embeds], dim=1)
                     else:
-                        prompt_pre = "\nUSER: "
+                        prompt_pre = "USER: "
                         prompt_pre_tokens = torch.unsqueeze(torch.tensor(tokenizer.encode(prompt_pre))[1:], 0).to(device) # NOTE: remove BOS token
                         prompt_pre_embeds = llm.get_input_embeddings()(prompt_pre_tokens)
                         prev_embeds = torch.cat([prev_embeds, prompt_pre_embeds], dim=1)

@@ -177,6 +177,16 @@ def train(configs, exp_name, g):
                 # NOTE: no lm_head here since they are not tied to word embeddings in LLaMA and no new tokens for generation
                 if "embed_tokens" in name:
                     param.requires_grad = True
+                    # Only train new tokens
+                    def make_hook(n_old_tokens):
+                        def hook(grad):
+                            # Zero out gradients for the old tokens
+                            grad[:n_old_tokens] = 0
+                            return grad
+                        return hook
+                    # Register the hook
+                    n_old_tokens = len(tokenizer) - len(new_tokens)
+                    param.register_hook(make_hook(n_old_tokens))
                 else:
                     param.requires_grad = False
                 if param.requires_grad:
@@ -275,7 +285,7 @@ def train(configs, exp_name, g):
                     print(f"Validation Loss: {val_loss}")
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        print(f"\nNew best validation loss: {best_val_loss}. Saving best model...")
+                        print(f"New best validation loss: {best_val_loss}. Saving best model...")
                         if len(llm_params) > 0:
                             if configs["use_lora"]:
                                 model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/best_llm_weights")
@@ -316,57 +326,22 @@ def train(configs, exp_name, g):
             torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
             print(f"LLM training done!")
 
-    # # validation
-    # if configs["val"]:
-    #     print(f"\nEvaluating LLM on the validation set...")
-    #     model.eval()
-    #     preds = []
-    #     with torch.no_grad():
-    #         for val_sample_step, batch in enumerate(tqdm.tqdm(val_loader)):
-    #             # NOTE: hardcoded for batch size of 1
-    #             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
-    #             answer_tokens = answer_tokens.to(device)
-    #             outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-    #             max_new_tokens = configs["max_new_tokens"][question_type[0]]
-    #             generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
-    #             generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip() # https://huggingface.co/docs/transformers/main/llm_tutorial
-    #             generation = generation.strip().split("</s>")[0].strip()
-    #             if "</s>" not in generation:
-    #                 generation += "</s>"
-    #             answer_tokens = answer_tokens[0].cpu().numpy()
-    #             answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
-    #             preds.append({
-    #                 "question": "".join([i[0] for i in question]),
-    #                 "question_type": question_type[0],
-    #                 "question_step": question_step.item(),
-    #                 "sample_paths": [i[0] for i in tactile],
-    #                 "answer": answer,
-    #                 "generation": generation
-    #             })
-    #         with open(f'{configs["exps_path"]}/{exp_name}/val_preds.json', 'w') as f:
-    #             json.dump(preds, f, indent=4)
-    #             f.close()
-    #     print(f"LLM validation done!")
-
     # test
     if configs["test"]:
         # Reload best model if we just trained and validated
         if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
             print(f"\nReloading best model from validation for testing...")
-            
             # Reload Projection
             best_proj_path = f"{configs['exps_path']}/{exp_name}/best_project.pt"
             if os.path.exists(best_proj_path):
                 print(f"Loading best projection from {best_proj_path}")
                 model.project.load_state_dict(torch.load(best_proj_path, map_location=device))
-            
             # Reload Encoder
             if not configs["freeze_encoder"]:
                 best_encoder_path = f"{configs['exps_path']}/{exp_name}/best_encoder.pt"
                 if os.path.exists(best_encoder_path):
                     print(f"Loading best encoder from {best_encoder_path}")
                     model.encoder.load_state_dict(torch.load(best_encoder_path, map_location=device))
-
             # Reload LLM
             if configs["use_lora"]:
                 best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
