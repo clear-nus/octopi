@@ -113,7 +113,7 @@ def train(configs, exp_name, g):
 
             if configs["llm_path"] is not None and configs["llm_path"].endswith(".pt"):
                 print(f"Loading LLM weights from {configs['llm_path']}...")
-                llm_weights = torch.load(configs["llm_path"], map_location="cpu")
+                llm_weights = torch.load(configs["llm_path"], map_location="cpu", weights_only=True)
                 llm.load_state_dict(llm_weights, strict=False)
 
     # add new tokens
@@ -153,7 +153,8 @@ def train(configs, exp_name, g):
             bias=configs["bias"],
             inference_mode=False,
             task_type="CAUSAL_LM",
-            modules_to_save=configs["modules_to_save"]
+            modules_to_save=configs["modules_to_save"],
+            use_dora=True
         )
         llm_weights_path = f"{configs['exps_path']}/{exp_name}/llm_weights"
         if not os.path.exists(llm_weights_path):
@@ -193,6 +194,19 @@ def train(configs, exp_name, g):
                     llm_params.append(param)
         else:
             for name, param in model.llm.named_parameters():
+                # NOTE: no lm_head here since they are not tied to word embeddings in LLaMA and no new tokens for generation
+                if "embed_tokens" in name:
+                    param.requires_grad = True
+                    # Only train new tokens
+                    def make_hook(n_old_tokens):
+                        def hook(grad):
+                            # Zero out gradients for the old tokens
+                            grad[:n_old_tokens] = 0
+                            return grad
+                        return hook
+                    # Register the hook
+                    n_old_tokens = len(tokenizer) - len(new_tokens)
+                    param.register_hook(make_hook(n_old_tokens))
                 if param.requires_grad:
                     llm_params.append(param)
         print(f"len(llm_params): {len(llm_params)}")
@@ -246,6 +260,13 @@ def train(configs, exp_name, g):
         trainable_model_parameters = filter(lambda p: p.requires_grad, model.parameters())
         trainable_params = sum([np.prod(p.size()) for p in trainable_model_parameters])
         all_params = sum([np.prod(p.size()) for p in model.parameters()])
+        # NOTE: Print trainable parameter names
+        print("\nTrainable Parameters:")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(f"- {name}: {param.shape}")
+        print("-" * 50)
+
         if configs["max_train_steps"] < len(train_loader):
             print(f"\nFinetuning LLM for {configs['max_train_steps']} samples and {int(configs['max_train_steps'] / configs['llm_gradient_accumulation_steps'])} gradient updates...")
         else:
@@ -274,7 +295,7 @@ def train(configs, exp_name, g):
                     optimizer_llm.step()
                     scheduler_llm.step()
                     optimizer_llm.zero_grad()
-            
+            # validation
             if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
                 if configs["val"]:
                     val_loss = evaluate_loss(model, val_loader, device)
@@ -286,6 +307,8 @@ def train(configs, exp_name, g):
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         print(f"New best validation loss: {best_val_loss}. Saving best model...")
+                        model.llm.generation_config.temperature = None
+                        model.llm.generation_config.top_p = None
                         if len(llm_params) > 0:
                             if configs["use_lora"]:
                                 model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/best_llm_weights")
@@ -294,37 +317,23 @@ def train(configs, exp_name, g):
                         torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/best_project.pt")
                         if not configs["freeze_encoder"]:
                             torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
-
-            if configs["save_freq"] is not None:
-                if train_sample_step != 0 and (train_sample_step + 1) % configs["save_freq"] == 0:
-                     # save models
-                    print("Saving tokenizer and models...")
-                    tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer_{train_sample_step + 1}")
-                    if len(llm_params) > 0:
-                        if configs["use_lora"]:
-                            model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}")
-                        else:
-                            torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights_{train_sample_step + 1}.pt")
-                    if not configs["freeze_encoder"]:
-                        torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder_{train_sample_step + 1}.pt")
-                    torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project_{train_sample_step + 1}.pt")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
-        if configs["save_freq"] is None:
-            # save models
-            print("Saving tokenizer and models...")
-            tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
-            model.llm.generation_config.temperature = None
-            model.llm.generation_config.top_p = None
-            # if len(llm_params) > 0:
-            #     if configs["use_lora"]:
-            #         model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
-            #     else:
-            #         torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights.pt")
-            if not configs["freeze_encoder"]:
-                torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
-            torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
-            print(f"LLM training done!")
+        # if not configs["val"]:
+        #     # Save models
+        #     print(f"\nNo validation during training. Saving final tokenizer and models...")
+        #     tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
+        #     model.llm.generation_config.temperature = None
+        #     model.llm.generation_config.top_p = None
+        #     if len(llm_params) > 0:
+        #         if configs["use_lora"]:
+        #             model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
+        #         else:
+        #             torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights.pt")
+        #     if not configs["freeze_encoder"]:
+        #         torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
+        #     torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
+        print(f"LLM training done!")
 
     # test
     if configs["test"]:
@@ -335,7 +344,7 @@ def train(configs, exp_name, g):
             best_proj_path = f"{configs['exps_path']}/{exp_name}/best_project.pt"
             if os.path.exists(best_proj_path):
                 print(f"Loading best projection from {best_proj_path}")
-                model.project.load_state_dict(torch.load(best_proj_path, map_location=device))
+                model.project.load_state_dict(torch.load(best_proj_path, map_location=device, weights_only=True))
             # Reload Encoder
             if not configs["freeze_encoder"]:
                 best_encoder_path = f"{configs['exps_path']}/{exp_name}/best_encoder.pt"
@@ -358,11 +367,14 @@ def train(configs, exp_name, g):
                         if os.path.exists(adapter_path):
                             adapters_weights = torch.load(adapter_path, map_location=device)
                             set_peft_model_state_dict(model.llm, adapters_weights)
+                    # Merge LoRA weights for faster inference
+                    print("Merging LoRA weights for faster inference...")
+                    model.llm = model.llm.merge_and_unload()
             else:
                 best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt"
                 if os.path.exists(best_llm_path):
                     print(f"Loading best LLM weights from {best_llm_path}")
-                    llm_weights = torch.load(best_llm_path, map_location=device)
+                    llm_weights = torch.load(best_llm_path, map_location=device, weights_only=True)
                     model.llm.load_state_dict(llm_weights, strict=False)
 
         print(f"\nTesting LLM on the test set...")

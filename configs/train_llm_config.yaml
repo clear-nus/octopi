@@ -1,6 +1,6 @@
 data_dir: data
 gpu_config: configs/gpu_config_7b.json
-cuda: 2
+cuda: 0
 seed: 0
 exps_path: exps
 train: true
@@ -20,7 +20,7 @@ prompt_depth_text: 12
 dim_context_text: 768
 freeze_projection: false
 projection_lr: 2.0e-05
-projection_path: null
+projection_path: exps/2026_01_05_23_39_30_train_llm_train_val_test_vicuna-7b_6000_0/best_project.pt
 train_files:
 - /data/samson/octopi/data/train_qa.json
 val_files:
@@ -34,26 +34,28 @@ cutoff_len: 512
 offload_dir: ./
 llm_lr: 0.0002
 quantized: false
-tokenizer_path: null
-llm_path: null
+tokenizer_path: exps/2026_01_05_23_39_30_train_llm_train_val_test_vicuna-7b_6000_0/tokenizer
+llm_path: exps/2026_01_05_23_39_30_train_llm_train_val_test_vicuna-7b_6000_0/best_llm_weights.pt
 lora_trained: false
-use_lora: false
-lora_alpha: 32
-r: 16
-lora_dropout: 0.1
+use_lora: true
+lora_alpha: 16
+r: 8
+lora_dropout: 0.05
 target_modules:
 - q_proj
 - k_proj
 - v_proj
-modules_to_save:
-- embed_tokens
+- o_proj
+- gate_proj
+- up_proj
+- down_proj
+modules_to_save: []
 bias: none
-max_train_steps: 6000
-save_freq: null
+max_train_steps: 3000
 per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
-warmup_steps: 0.03
-val_freq: 400
+warmup_steps: 0.1
+val_freq: 300
 per_device_val_batch_size: 1
 max_new_tokens:
   train_object_property_description: 100

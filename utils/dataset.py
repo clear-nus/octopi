@@ -206,7 +206,7 @@ class TactileLLMDataset(Dataset):
         question_step = sample[0]["question_steps"]
         question = []
         tactile = []
-        for s in sample[:-1]:
+        for s in sample[1:-1]:
             if s["role"] == "ASSISTANT":
                 question += [s["role"]] + [": "] + s["content"] + [f"{self.eos_token}"]
             elif s["role"] == "USER":
@@ -229,7 +229,6 @@ class TactileLLMDataset(Dataset):
         if current_text:
             merged_question.append(current_text)
         question = merged_question
-        print(question)
         answer = "".join(sample[-1]["content"])
         # 2) get tokens
         answer_tokens = torch.tensor(self.tokenizer.encode(answer + f'{self.eos_token}'), dtype=torch.int64)[1:]
@@ -243,5 +242,4 @@ class TactileLLMDataset(Dataset):
                 frames, indices = get_frames(t, self.image_processor, transforms_image, return_indices=True)
             all_tactile_frames.append(frames)
             all_indices.append(indices)
-
         return question, answer_tokens, all_tactile_frames, tactile, question_type, question_step, all_indices
