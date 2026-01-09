@@ -10,7 +10,7 @@ flip_p: 0.5
 use_vqvae: false
 use_clip: openai/clip-vit-large-patch14
 freeze_encoder: true
-encoder_path: /data/samson/octopi/exps/train_clip_seed_0/encoder.pt
+encoder_path: /home/users/samson/octopi/exps/train_clip_seed_0/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
 prompt_depth_vision: 12
@@ -22,13 +22,13 @@ freeze_projection: false
 projection_lr: 0.0002
 projection_path: exps/2026_01_05_23_39_30_train_llm_train_val_test_vicuna-7b_6000_0/best_project.pt
 train_files:
-- /data/samson/octopi/data/train_qa.json
+- /home/users/samson/octopi/data/train_qa.json
 val_files:
-- /data/samson/octopi/data/val_opd_qa.json
-- /data/samson/octopi/data/val_qa.json
+- /home/users/samson/octopi/data/val_opd_qa.json
+- /home/users/samson/octopi/data/val_qa.json
 test_files:
-- /data/samson/octopi/data/test_opd_qa.json
-- /data/samson/octopi/data/test_qa.json
+- /home/users/samson/octopi/data/test_opd_qa.json
+- /home/users/samson/octopi/data/test_qa.json
 model_type: vicuna-7b
 cutoff_len: 512
 offload_dir: ./
@@ -45,10 +45,6 @@ target_modules:
 - q_proj
 - v_proj
 - o_proj
-# - k_proj
-# - gate_proj
-# - up_proj
-# - down_proj
 modules_to_save:
 - embed_tokens
 bias: none
@@ -57,6 +53,7 @@ per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 32
 warmup_steps: 0.1
 val_freq: 300
+val_subset_size: 50
 per_device_val_batch_size: 1
 max_new_tokens:
   train_object_property_description: 100

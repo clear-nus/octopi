@@ -6,7 +6,7 @@ tqdm
 natsort
 torchvision
 transformers==4.31.0
-peft==0.2.0
+peft
 python-dotenv
 sentencepiece
 protobuf

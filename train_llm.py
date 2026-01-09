@@ -18,7 +18,7 @@ from datetime import datetime
 import sys
 from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup
 from transformers.utils import logging
-from evaluate_llm import LLMEvaluator
+from evaluate_llm import LLMEvaluator, random_scores
 
 
 def add_new_tokens(llm, tokenizer, new_tokens):
@@ -61,6 +61,49 @@ def evaluate_loss(model, val_loader, device):
     return total_loss / len(val_loader), opd_loss / opd_count, reasoning_loss / reasoning_count
 
 
+def evaluate_metrics(model, val_loader, device, tokenizer, configs):
+    model.eval()
+    evaluator = LLMEvaluator()
+    val_subset_size = configs.get("val_subset_size", None)
+    if val_subset_size is not None:
+        print(f"\nEvaluating metrics on validation subset ({val_subset_size} samples)...")
+    else:
+        print(f"\nEvaluating metrics on validation set...")
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm.tqdm(val_loader, desc="Evaluating metrics")):
+            if val_subset_size is not None and i >= val_subset_size:
+                break
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+            answer_tokens = answer_tokens.to(device)
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+            max_new_tokens = configs["max_new_tokens"][question_type[0]]
+            generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
+            generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip()
+            answer_tokens = answer_tokens[0].cpu().numpy()
+            answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
+            generation = generation.strip().split("</s>")[0].strip()
+            if "</s>" not in generation:
+                generation += "</s>"
+            # evaluation
+            evaluator.evaluate(
+                question="".join([i[0] for i in question]), 
+                generation=generation, 
+                answer=answer, 
+                question_type=question_type[0], 
+                question_step=question_step.item(), 
+                show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False
+            )
+    results = evaluator.get_results()
+    acc_opd = results.get("eval_object_property_description", {}).get("combined_accuracy", 0)
+    acc_pc = results.get("eval_property_comparison", {}).get("accuracy", 0)
+    acc_pss = results.get("eval_property_superlative_selection", {}).get("accuracy", 0)
+    acc_pom = results.get("eval_property_object_match", {}).get("accuracy", 0)
+    # geometric mean of accuracies as overall score
+    score = (acc_opd * acc_pc * acc_pss * acc_pom) ** 0.25
+    model.train()
+    return score, results
+
+
 def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, file_suffix):
     print(f"\nEvaluating LLM on the test set ({file_suffix})...")
     model.eval()
@@ -97,7 +140,10 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
         for task, stats in results.items():
             f.write(f"{task}:\n")
             for stat, value in stats.items():
-                f.write(f"\t{stat}: {value}\n")
+                if task in random_scores and stat in random_scores[task]:
+                    f.write(f"\t{stat}: {value} ({random_scores[task][stat]})\n")
+                else:
+                    f.write(f"\t{stat}: {value}\n")
         f.close()
     print(f"Evaluation ({file_suffix}) done!")
 
@@ -187,7 +233,7 @@ def train(configs, exp_name, g):
         train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     if configs["val"]:
         val_dataset = TactileLLMDataset(image_processor, configs["val_files"], split_name="val", tokenizer=tokenizer, flip_p=configs["flip_p"])
-        val_loader = DataLoader(val_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
+        val_loader = DataLoader(val_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     if configs["test"]:
         test_dataset = TactileLLMDataset(image_processor, configs["test_files"], split_name="test", tokenizer=tokenizer, flip_p=configs["flip_p"])
         test_loader = DataLoader(test_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
@@ -326,7 +372,7 @@ def train(configs, exp_name, g):
 
     # training
     if configs["train"]:
-        best_val_loss = float('inf')
+        best_val_score = 0
         # get trainable/non-trainable model parameter stats
         model.train()
         if configs["freeze_encoder"]:
@@ -374,17 +420,19 @@ def train(configs, exp_name, g):
             # validation
             if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
                 if configs["val"]:
-                    val_loss, opd_val_loss, reasoning_val_loss = evaluate_loss(model, val_loader, device)
+                    val_score, val_results = evaluate_metrics(model, val_loader, device, tokenizer, configs)
                     if configs["freeze_encoder"]:
                         model.encoder.eval()
                     if configs["freeze_projection"]:
                         model.project.eval()
-                    print(f"\nValidation Loss: {val_loss}")
-                    print(f"OPD Validation Loss: {opd_val_loss}")
-                    print(f"Reasoning Validation Loss: {reasoning_val_loss}")
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        print(f"New best validation loss: {best_val_loss}. Saving best model...")
+                    print(f"Validation Score: {val_score}")
+                    print(f"OPD Combined Accuracy: {val_results.get('eval_object_property_description', {}).get('combined_accuracy', 0)}")
+                    print(f"PC Accuracy: {val_results.get('eval_property_comparison', {}).get('accuracy', 0)}")
+                    print(f"PSS Accuracy: {val_results.get('eval_property_superlative_selection', {}).get('accuracy', 0)}")
+                    print(f"POM Accuracy: {val_results.get('eval_property_object_match', {}).get('accuracy', 0)}")
+                    if val_score > best_val_score:
+                        best_val_score = val_score
+                        print(f"New best validation score: {best_val_score}. Saving best model...")
                         model.llm.generation_config.temperature = None
                         model.llm.generation_config.top_p = None
                         if len(llm_params) > 0:
