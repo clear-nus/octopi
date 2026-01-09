@@ -16,8 +16,9 @@ import random
 import yaml
 from datetime import datetime
 import sys
-from transformers import CLIPImageProcessor
+from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup
 from transformers.utils import logging
+from evaluate_llm import LLMEvaluator
 
 
 def add_new_tokens(llm, tokenizer, new_tokens):
@@ -35,14 +36,70 @@ def add_new_tokens(llm, tokenizer, new_tokens):
 def evaluate_loss(model, val_loader, device):
     model.eval()
     total_loss = 0
+    opd_loss = 0
+    opd_count = 0
+    reasoning_loss = 0
+    reasoning_count = 0
     with torch.no_grad():
         for batch in tqdm.tqdm(val_loader, desc="Evaluating loss"):
             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
             answer_tokens = answer_tokens.to(device)
             outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-            total_loss += outputs.loss.item()
+            loss = outputs.loss.item()
+            total_loss += loss
+            if "object_property_description" in question_type[0]:
+                opd_loss += loss
+                opd_count += 1
+            elif "property_comparison" in question_type[0] or "property_superlative_selection" in question_type[0] or "property_object_match" in question_type[0]:
+                reasoning_loss += loss
+                reasoning_count += 1
     model.train()
-    return total_loss / len(val_loader)
+    if opd_count == 0:
+        opd_count = 1
+    if reasoning_count == 0:
+        reasoning_count = 1
+    return total_loss / len(val_loader), opd_loss / opd_count, reasoning_loss / reasoning_count
+
+
+def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, file_suffix):
+    print(f"\nEvaluating LLM on the test set ({file_suffix})...")
+    model.eval()
+    preds = []
+    evaluator = LLMEvaluator()
+    with torch.no_grad():
+        for test_sample_step, batch in enumerate(tqdm.tqdm(test_loader)):
+            # NOTE: hardcoded for batch size of 1
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+            answer_tokens = answer_tokens.to(device)
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+            max_new_tokens = configs["max_new_tokens"][question_type[0]]
+            generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
+            generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip() # https://huggingface.co/docs/transformers/main/llm_tutorial
+            answer_tokens = answer_tokens[0].cpu().numpy()
+            answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
+            generation = generation.strip().split("</s>")[0].strip()
+            if "</s>" not in generation:
+                generation += "</s>"
+            preds.append({
+                "question": "".join([i[0] for i in question]),
+                "question_type": question_type[0],
+                "question_step": question_step.item(),
+                "sample_paths": [i[0] for i in tactile],
+                "answer": answer,
+                "generation": generation
+            })
+            evaluator.evaluate(question="".join([i[0] for i in question]), generation=generation, answer=answer, question_type=question_type[0], question_step=question_step.item(), show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False)
+    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_preds.json', 'w') as f:
+        json.dump(preds, f, indent=4)
+        f.close()
+    results = evaluator.get_results()
+    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_results.txt', 'w') as f:
+        for task, stats in results.items():
+            f.write(f"{task}:\n")
+            for stat, value in stats.items():
+                f.write(f"\t{stat}: {value}\n")
+        f.close()
+    print(f"Evaluation ({file_suffix}) done!")
 
 
 def train(configs, exp_name, g):
@@ -158,14 +215,21 @@ def train(configs, exp_name, g):
         )
         llm_weights_path = f"{configs['exps_path']}/{exp_name}/llm_weights"
         if not os.path.exists(llm_weights_path):
-            os.makedirs(llm_weights_path)
-            llm_peft = get_peft_model(llm, peft_config)
-            llm_peft.save_pretrained(llm_weights_path)
-            llm_peft = None
+            # os.makedirs(llm_weights_path)
+            # llm_peft = get_peft_model(llm, peft_config)
+            # llm_peft.save_pretrained(llm_weights_path)
+            # llm_peft = None
+            
+            # Instead just apply the config in-memory directly
+            llm = get_peft_model(llm, peft_config)
+            
         if configs["quantized"]:
-            llm = PeftModel.from_pretrained(model=llm, model_id=llm_weights_path, is_trainable=True, device_map="auto", max_memory=gpu_max_mem_config, quantization_config=bnb_config)
+            # If we are not loading from disk, ‘llm’ is already the PeftModel from above
+            pass
+            # llm = PeftModel.from_pretrained(model=llm, model_id=llm_weights_path, is_trainable=True, device_map="auto", max_memory=gpu_max_mem_config, quantization_config=bnb_config)
         else:
-            llm = PeftModel.from_pretrained(model=llm, model_id=llm_weights_path, is_trainable=True, device_map="auto", max_memory=gpu_max_mem_config)
+            # llm = PeftModel.from_pretrained(model=llm, model_id=llm_weights_path, is_trainable=True, device_map="auto", max_memory=gpu_max_mem_config)
+             pass
         model.llm = llm
     else:
         model.llm = llm
@@ -212,8 +276,20 @@ def train(configs, exp_name, g):
         print(f"len(llm_params): {len(llm_params)}")
         if len(llm_params) > 0:
             optimizer_llm = torch.optim.AdamW(llm_params, lr=configs["llm_lr"])
-            num_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
-            scheduler_llm = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_llm, T_max=num_steps)
+            if configs["max_train_steps"] < len(train_loader):
+                num_training_steps = int(configs["max_train_steps"] / configs["llm_gradient_accumulation_steps"])
+            else:
+                num_training_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
+            if configs["warmup_steps"] < 1:
+                num_warmup_steps = int(num_training_steps * configs["warmup_steps"])
+            else:
+                num_warmup_steps = int(configs["warmup_steps"])
+
+            scheduler_llm = get_cosine_schedule_with_warmup(
+                optimizer_llm, 
+                num_warmup_steps=num_warmup_steps, 
+                num_training_steps=num_training_steps
+            )
 
     # 2) encoder setup
     if configs["use_vqvae"]:
@@ -260,12 +336,12 @@ def train(configs, exp_name, g):
         trainable_model_parameters = filter(lambda p: p.requires_grad, model.parameters())
         trainable_params = sum([np.prod(p.size()) for p in trainable_model_parameters])
         all_params = sum([np.prod(p.size()) for p in model.parameters()])
-        # NOTE: Print trainable parameter names
-        print("\nTrainable Parameters:")
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                print(f"- {name}: {param.shape}")
-        print("-" * 50)
+        # # NOTE: Print trainable parameter names
+        # print("\nTrainable Parameters:")
+        # for name, param in model.named_parameters():
+        #     if param.requires_grad:
+        #         print(f"- {name}: {param.shape}")
+        # print("-" * 50)
 
         if configs["max_train_steps"] < len(train_loader):
             print(f"\nFinetuning LLM for {configs['max_train_steps']} samples and {int(configs['max_train_steps'] / configs['llm_gradient_accumulation_steps'])} gradient updates...")
@@ -298,12 +374,14 @@ def train(configs, exp_name, g):
             # validation
             if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
                 if configs["val"]:
-                    val_loss = evaluate_loss(model, val_loader, device)
+                    val_loss, opd_val_loss, reasoning_val_loss = evaluate_loss(model, val_loader, device)
                     if configs["freeze_encoder"]:
                         model.encoder.eval()
                     if configs["freeze_projection"]:
                         model.project.eval()
-                    print(f"Validation Loss: {val_loss}")
+                    print(f"\nValidation Loss: {val_loss}")
+                    print(f"OPD Validation Loss: {opd_val_loss}")
+                    print(f"Reasoning Validation Loss: {reasoning_val_loss}")
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         print(f"New best validation loss: {best_val_loss}. Saving best model...")
@@ -337,6 +415,8 @@ def train(configs, exp_name, g):
 
     # test
     if configs["test"]:
+        if configs["train"]:
+            run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_final")
         # Reload best model if we just trained and validated
         if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
             print(f"\nReloading best model from validation for testing...")
@@ -376,35 +456,7 @@ def train(configs, exp_name, g):
                     print(f"Loading best LLM weights from {best_llm_path}")
                     llm_weights = torch.load(best_llm_path, map_location=device, weights_only=True)
                     model.llm.load_state_dict(llm_weights, strict=False)
-
-        print(f"\nTesting LLM on the test set...")
-        model.eval()
-        preds = []
-        with torch.no_grad():
-            for test_sample_step, batch in enumerate(tqdm.tqdm(test_loader)):
-                # NOTE: hardcoded for batch size of 1
-                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
-                answer_tokens = answer_tokens.to(device)
-                outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-                max_new_tokens = configs["max_new_tokens"][question_type[0]]
-                generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
-                generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip() # https://huggingface.co/docs/transformers/main/llm_tutorial
-                answer_tokens = answer_tokens[0].cpu().numpy()
-                answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
-                generation = generation.strip().split("</s>")[0].strip()
-                if "</s>" not in generation:
-                    generation += "</s>"
-                preds.append({
-                    "question": "".join([i[0] for i in question]),
-                    "question_type": question_type[0],
-                    "question_step": question_step.item(),
-                    "sample_paths": [i[0] for i in tactile],
-                    "answer": answer,
-                    "generation": generation
-                })
-            with open(f'{configs["exps_path"]}/{exp_name}/test_preds.json', 'w') as f:
-                json.dump(preds, f, indent=4)
-                f.close()
+        run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
         print(f"LLM test done!")
 
 

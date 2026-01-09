@@ -1,7 +1,7 @@
 # general
-data_dir: data
-cuda: 2
-seed: 2
+data_dir: data_clip
+cuda: 3
+seed: 4
 exps_path: exps
 
 # frame processing

@@ -135,7 +135,7 @@ DESCRIPTIONS = {
         "The surface feels moderately compressible, its texture is notably rough and big bumps and irregularities are present.",
     ],
     'physiclear_tsa_lock_numbers': [
-        "The surface feels solid and rigid, exhibits a notable roughness and the surface has small bumps at certain parts.",
+        "The surface feels solid and rigid, exhibits a notable roughness and the surface has small bumps at some parts.",
     ],
     'physiclear_blanket': [
         "The surface feels moderately compressible, its texture is notably smooth and there are no bumps or ridges.",
