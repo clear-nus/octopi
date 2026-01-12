@@ -33,35 +33,41 @@ def add_new_tokens(llm, tokenizer, new_tokens):
         llm.model.embed_tokens.weight[-n_new_tokens:] = input_embeddings_avg
 
 
-def evaluate_loss(model, val_loader, device):
-    model.eval()
-    total_loss = 0
-    opd_loss = 0
-    opd_count = 0
-    reasoning_loss = 0
-    reasoning_count = 0
-    with torch.no_grad():
-        for batch in tqdm.tqdm(val_loader, desc="Evaluating loss"):
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
-            answer_tokens = answer_tokens.to(device)
-            outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-            loss = outputs.loss.item()
-            total_loss += loss
-            if "object_property_description" in question_type[0]:
-                opd_loss += loss
-                opd_count += 1
-            elif "property_comparison" in question_type[0] or "property_superlative_selection" in question_type[0] or "property_object_match" in question_type[0]:
-                reasoning_loss += loss
-                reasoning_count += 1
-    model.train()
-    if opd_count == 0:
-        opd_count = 1
-    if reasoning_count == 0:
-        reasoning_count = 1
-    return total_loss / len(val_loader), opd_loss / opd_count, reasoning_loss / reasoning_count
+# def evaluate_loss(model, val_loader, device):
+#     model.eval()
+#     total_loss = 0
+#     opd_loss = 0
+#     opd_count = 0
+#     reasoning_loss = 0
+#     reasoning_count = 0
+#     with torch.no_grad():
+#         for batch in tqdm.tqdm(val_loader, desc="Evaluating loss"):
+#             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+#             answer_tokens = answer_tokens.to(device)
+#             outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+#             loss = outputs.loss.item()
+#             total_loss += loss
+#             if "object_property_description" in question_type[0]:
+#                 opd_loss += loss
+#                 opd_count += 1
+#             elif "property_comparison" in question_type[0] or "property_superlative_selection" in question_type[0] or "property_object_match" in question_type[0]:
+#                 reasoning_loss += loss
+#                 reasoning_count += 1
+#     model.train()
+#     if opd_count == 0:
+#         opd_count = 1
+#     if reasoning_count == 0:
+#         reasoning_count = 1
+#     return total_loss / len(val_loader), opd_loss / opd_count, reasoning_loss / reasoning_count
 
 
 def evaluate_metrics(model, val_loader, device, tokenizer, configs):
+    evaluator = LLMEvaluator()
+    val_subset_size = configs.get("val_subset_size", None)
+    if val_subset_size is not None:
+        print(f"\nEvaluating metrics on validation subset ({val_subset_size} samples)...")
+    else:
+        print(f"\nEvaluating metrics on validation set...")
     model.eval()
     # Merge LoRA adapters for faster inference (especially important for DoRA)
     did_merge = False
@@ -75,12 +81,6 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
                 print(f"Warning: Could not merge adapters: {e}")
         else:
             print("Warning: model.llm does not have merge_adapter method. Inference might be slow.")
-    evaluator = LLMEvaluator()
-    val_subset_size = configs.get("val_subset_size", None)
-    if val_subset_size is not None:
-        print(f"\nEvaluating metrics on validation subset ({val_subset_size} samples)...")
-    else:
-        print(f"\nEvaluating metrics on validation set...")
     with torch.no_grad():
         for i, batch in enumerate(tqdm.tqdm(val_loader, desc="Evaluating metrics")):
             if val_subset_size is not None and i >= val_subset_size:
@@ -96,11 +96,11 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
             generation = generation.strip().split("</s>")[0].strip()
             if "</s>" not in generation:
                 generation += "</s>"
-            # DEBUG: Print first generation to check why accuracy is 0.0
-            if i == 0:
-                print(f"\n[DEBUG] Question Type: {question_type[0]}")
-                print(f"[DEBUG] Generation: {generation}")
-                print(f"[DEBUG] Answer: {answer}\n")
+            # # DEBUG: Print first generation to check why accuracy is 0.0
+            # if i == 0:
+            #     print(f"\n[DEBUG] Question Type: {question_type[0]}")
+            #     print(f"[DEBUG] Generation: {generation}")
+            #     print(f"[DEBUG] Answer: {answer}\n")
             # evaluation
             evaluator.evaluate(
                 question="".join([i[0] for i in question]), 
