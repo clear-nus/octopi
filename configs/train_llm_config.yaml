@@ -1,6 +1,6 @@
 data_dir: data
 gpu_config: configs/gpu_config_7b.json
-cuda: 0
+cuda: 1
 seed: 0
 exps_path: exps
 train: true
@@ -40,20 +40,24 @@ lora_trained: false
 use_lora: true
 lora_alpha: 256
 r: 128
-lora_dropout: 0.1
+lora_dropout: 0.3
 target_modules:
 - q_proj
 - v_proj
 - o_proj
+- k_proj
+- up_proj
+- down_proj
+- gate_proj
 modules_to_save:
 - embed_tokens
 bias: none
 max_train_steps: 3000
 per_device_train_batch_size: 1
-llm_gradient_accumulation_steps: 32
+llm_gradient_accumulation_steps: 64
 warmup_steps: 0.1
 val_freq: 300
-val_subset_size: 50
+val_subset_size: 200
 per_device_val_batch_size: 1
 max_new_tokens:
   train_object_property_description: 100

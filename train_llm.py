@@ -63,6 +63,18 @@ def evaluate_loss(model, val_loader, device):
 
 def evaluate_metrics(model, val_loader, device, tokenizer, configs):
     model.eval()
+    # Merge LoRA adapters for faster inference (especially important for DoRA)
+    did_merge = False
+    if configs.get("use_lora", False):
+        if hasattr(model.llm, "merge_adapter"):
+            try:
+                print("Merging LoRA adapters for validation...")
+                model.llm.merge_adapter()
+                did_merge = True
+            except Exception as e:
+                print(f"Warning: Could not merge adapters: {e}")
+        else:
+            print("Warning: model.llm does not have merge_adapter method. Inference might be slow.")
     evaluator = LLMEvaluator()
     val_subset_size = configs.get("val_subset_size", None)
     if val_subset_size is not None:
@@ -84,6 +96,11 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
             generation = generation.strip().split("</s>")[0].strip()
             if "</s>" not in generation:
                 generation += "</s>"
+            # DEBUG: Print first generation to check why accuracy is 0.0
+            if i == 0:
+                print(f"\n[DEBUG] Question Type: {question_type[0]}")
+                print(f"[DEBUG] Generation: {generation}")
+                print(f"[DEBUG] Answer: {answer}\n")
             # evaluation
             evaluator.evaluate(
                 question="".join([i[0] for i in question]), 
@@ -93,13 +110,35 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
                 question_step=question_step.item(), 
                 show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False
             )
+    if did_merge:
+        print("Unmerging LoRA adapters to resume training...")
+        try:
+            model.llm.unmerge_adapter()
+        except Exception as e:
+            print(f"Warning: Could not unmerge adapters: {e}")
     results = evaluator.get_results()
     acc_opd = results.get("eval_object_property_description", {}).get("combined_accuracy", 0)
     acc_pc = results.get("eval_property_comparison", {}).get("accuracy", 0)
     acc_pss = results.get("eval_property_superlative_selection", {}).get("accuracy", 0)
     acc_pom = results.get("eval_property_object_match", {}).get("accuracy", 0)
+
+    # Calculate number of tasks with validation accuracies above random
+    num_tasks_above_random = 0
+    if acc_opd > random_scores["eval_object_property_description"]["combined_accuracy"]:
+        num_tasks_above_random += 1
+    if acc_pc > random_scores["eval_property_comparison"]["accuracy"]:
+        num_tasks_above_random += 1
+    if acc_pss > random_scores["eval_property_superlative_selection"]["accuracy"]:
+        num_tasks_above_random += 1
+    if acc_pom > random_scores["eval_property_object_match"]["accuracy"]:
+        num_tasks_above_random += 1
+
     # geometric mean of accuracies as overall score
-    score = (acc_opd * acc_pc * acc_pss * acc_pom) ** 0.25
+    geo_mean = (acc_opd * acc_pc * acc_pss * acc_pom) ** 0.25
+
+    # Combined score: prioritize number of tasks above random, then geometric mean
+    score = num_tasks_above_random + geo_mean
+
     model.train()
     return score, results
 
@@ -107,6 +146,20 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
 def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, file_suffix):
     print(f"\nEvaluating LLM on the test set ({file_suffix})...")
     model.eval()
+    # Merge LoRA adapters for faster inference
+    did_merge = False
+    if configs.get("use_lora", False):
+        if hasattr(model.llm, "merge_adapter"):
+            try:
+                print("Merging LoRA adapters for testing...")
+                model.llm.merge_adapter()
+                did_merge = True
+            except Exception as e:
+                print(f"Warning: Could not merge adapters: {e}")
+        else:
+            # If model.llm is not a PeftModel but we are in use_lora mode (e.g. merge_and_unload was called)
+            # then we don't need to do anything.
+            pass
     preds = []
     evaluator = LLMEvaluator()
     with torch.no_grad():
@@ -132,6 +185,12 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
                 "generation": generation
             })
             evaluator.evaluate(question="".join([i[0] for i in question]), generation=generation, answer=answer, question_type=question_type[0], question_step=question_step.item(), show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False)
+    if did_merge:
+        print("Unmerging LoRA adapters after testing...")
+        try:
+            model.llm.unmerge_adapter()
+        except Exception as e:
+            print(f"Warning: Could not unmerge adapters: {e}")
     with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_preds.json', 'w') as f:
         json.dump(preds, f, indent=4)
         f.close()
@@ -219,6 +278,12 @@ def train(configs, exp_name, g):
                 llm_weights = torch.load(configs["llm_path"], map_location="cpu", weights_only=True)
                 llm.load_state_dict(llm_weights, strict=False)
 
+    # Fix generation config warnings
+    if hasattr(llm, "generation_config"):
+        llm.generation_config.do_sample = False
+        llm.generation_config.temperature = None
+        llm.generation_config.top_p = None
+
     # add new tokens
     if configs["tokenizer_path"] is None:
         # reference: https://jaotheboss.medium.com/domain-training-your-llm-6c77f53e3e27
@@ -243,7 +308,14 @@ def train(configs, exp_name, g):
         model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm.model, use_vqvae=configs["use_vqvae"], device=device)
     else:
         model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm, use_vqvae=configs["use_vqvae"], device=device)
-    model.to(device)
+    
+    # If using device_map (gpu_config present), we should not move the whole model to device
+    # because the LLM parts are already placed. We only move the other modules.
+    if configs["gpu_config"] is not None:
+        model.encoder.to(device)
+        model.project.to(device)
+    else:
+        model.to(device)
 
     # 1) LLM setup
     if configs["use_lora"]:

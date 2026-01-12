@@ -126,12 +126,22 @@ class MultimodalLLMForCausalLM(nn.Module):
         # 1) question embeds
         question_embeds = []
         img_token_count = 0
+        
+        # Determine the device where the LLM input embeddings reside
+        # self.llm.device might not be reliable if using device_map
+        if hasattr(self.llm, "get_input_embeddings"):
+            llm_device = self.llm.get_input_embeddings().weight.device
+        elif hasattr(self.llm, "model") and hasattr(self.llm.model, "embed_tokens"):
+             llm_device = self.llm.model.embed_tokens.weight.device
+        else:
+            llm_device = self.device
+
         for i, chunk in enumerate(question):
             chunk = chunk[0]
             if "img_tokens" in chunk:
                 if i == 0:
                     # if the first chunk is an image, we need to add a BOS token
-                    bos_token = torch.tensor([self.tokenizer.bos_token_id], dtype=torch.int64).to(self.device)
+                    bos_token = torch.tensor([self.tokenizer.bos_token_id], dtype=torch.int64).to(llm_device)
                     bos_embed = self.llm.get_input_embeddings()(bos_token)
                     bos_embed = torch.unsqueeze(bos_embed, dim=0)
                     question_embeds.append(bos_embed)
@@ -139,27 +149,31 @@ class MultimodalLLMForCausalLM(nn.Module):
                 idx = [all_indices[img_token_count]]
                 sinusoidal_embeds = sinusoidal_positional_embedding(token_sequence_size=5, indices=idx, token_embedding_dim=self.encoder_output_size, batch_size=visual_embeds.shape[0]).to(visual_embeds.device)
                 chunk_embeds = self.project(visual_embeds + sinusoidal_embeds)
+                
+                # Move visual embeddings to LLM device
+                chunk_embeds = chunk_embeds.to(llm_device)
                 img_token_count += 1
             else:
                 if i == 0:
-                    chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64).to(self.device))
+                    chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64).to(llm_device))
                 else:
-                    chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64)[1:].to(self.device))
+                    chunk_embeds = self.llm.get_input_embeddings()(torch.tensor(self.tokenizer.encode(chunk), dtype=torch.int64)[1:].to(llm_device))
                 chunk_embeds = torch.unsqueeze(chunk_embeds, dim=0)
             question_embeds.append(chunk_embeds)
         question_embeds = torch.cat(question_embeds, dim=1)
         # 2) answer embeds
+        answer_tokens = answer_tokens.to(llm_device)
         answer_embeds = self.llm.get_input_embeddings()(answer_tokens)
         full_embeds_len = question_embeds.shape[1] + answer_embeds.shape[1]
         question_embeds_len = question_embeds.shape[1]
         batch_size = question_embeds.shape[0]
         # NOTE: padding token embedding index is 0
-        padding_embeds = self.llm.get_input_embeddings()(torch.zeros(batch_size, self.cutoff_len - full_embeds_len, device=self.device, dtype=torch.int64))
+        padding_embeds = self.llm.get_input_embeddings()(torch.zeros(batch_size, self.cutoff_len - full_embeds_len, device=llm_device, dtype=torch.int64))
         # 3) combine embeds
         input_embeds = torch.cat((question_embeds, answer_embeds, padding_embeds), dim=1)
         pre_label_dummy_token, post_label_dummy_token = self.get_dummy_token(answer_embeds, question_embeds_len)
-        labels = torch.cat((pre_label_dummy_token, answer_tokens, post_label_dummy_token), dim=1)
+        labels = torch.cat((pre_label_dummy_token.to(llm_device), answer_tokens, post_label_dummy_token.to(llm_device)), dim=1)
         batch_size = answer_embeds.shape[0]
-        attention_mask = torch.cat((torch.ones([batch_size, full_embeds_len]), torch.zeros([batch_size, padding_embeds.shape[1]])), dim=1).to(self.device)
+        attention_mask = torch.cat((torch.ones([batch_size, full_embeds_len]), torch.zeros([batch_size, padding_embeds.shape[1]])), dim=1).to(llm_device)
         out = self.llm(inputs_embeds=input_embeds, labels=labels, attention_mask=attention_mask) # pass in embeddings directly: https://huggingface.co/docs/transformers/main/en/model_doc/llama
         return out, question_embeds
