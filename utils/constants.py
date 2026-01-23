@@ -15,6 +15,14 @@ TRAIN_OBJECTS = [
     'physiclear_masking_tape', 'physiclear_kiwi_kinda_ripe', 'physiclear_bread_knife_blade', 'physiclear_controller_base', 'physiclear_orange','physiclear_pen_pad', 'physiclear_eraser', 'physiclear_lemon'
 ]
 
+# VAL_OBJECTS = [
+#     'physiclear_tsa_lock_numbers', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_hairbrush_handle', 'physiclear_toilet_brush_bristles', 'physiclear_bath_towel', 'physiclear_clothes_peg'
+# ]
+
+# TEST_OBJECTS = [
+#     'physiclear_microfiber_cloth', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_hairbrush_bristles', 'physiclear_steel_wool', 'physiclear_bubble_wrap', 'physiclear_ice_block',
+# ]
+
 VAL_OBJECTS = [
     'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap'
 ]
