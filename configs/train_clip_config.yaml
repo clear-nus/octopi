@@ -1,13 +1,8 @@
-# general
-data_dir: data_clip
-cuda: 3
-seed: 4
+data_dir: data
+cuda: 0
+seed: 0
 exps_path: exps
-
-# frame processing
 flip_p: 0.5
-
-# encoder
 use_clip: openai/clip-vit-large-patch14
 num_epochs: 30
 lr: 0.001
@@ -15,9 +10,7 @@ classifier_lr: 0.001
 batch_size: 8
 gradient_accumulation_steps: 4
 output_size: 1024
-
-# prompt learning
-prompt_learning: True
+prompt_learning: true
 num_context_vision: 8
 prompt_depth_vision: 12
 dim_context_vision: 1024

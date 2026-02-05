@@ -273,6 +273,10 @@ def train(configs, exp_name, g):
             if len(tokenizer) > llm.get_input_embeddings().weight.shape[0]:
                 llm.resize_token_embeddings(len(tokenizer))
 
+            if configs["tokenizer_path"] is None:
+                new_tokens = ['<tact_start>', '<tact_end>']
+                add_new_tokens(llm, tokenizer, new_tokens)
+
             if configs["llm_path"] is not None and configs["llm_path"].endswith(".pt"):
                 print(f"Loading LLM weights from {configs['llm_path']}...")
                 llm_weights = torch.load(configs["llm_path"], map_location="cpu", weights_only=True)
@@ -402,7 +406,6 @@ def train(configs, exp_name, g):
                 num_warmup_steps = int(num_training_steps * configs["warmup_steps"])
             else:
                 num_warmup_steps = int(configs["warmup_steps"])
-
             scheduler_llm = get_cosine_schedule_with_warmup(
                 optimizer_llm, 
                 num_warmup_steps=num_warmup_steps, 
@@ -515,6 +518,7 @@ def train(configs, exp_name, g):
                         torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/best_project.pt")
                         if not configs["freeze_encoder"]:
                             torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
+                        tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
         # if not configs["val"]:

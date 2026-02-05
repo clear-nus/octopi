@@ -54,8 +54,8 @@ def main(configs, exp_name, g, device):
     loss_fn = torch.nn.CrossEntropyLoss()
     optimizer_clip = torch.optim.AdamW(vificlip.parameters(), lr=configs["lr"])
     optimizer_classifier = torch.optim.AdamW(classifier.parameters(), lr=configs["classifier_lr"])
-    scheduler_clip = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_clip, T_max=len(train_loader) / configs["gradient_accumulation_steps"], eta_min=configs["lr"] / 100)
-    scheduler_classifier = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_classifier, T_max=len(train_loader) / configs["gradient_accumulation_steps"], eta_min=configs["classifier_lr"] / 100)
+    scheduler_clip = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_clip, T_max=len(train_loader) / configs["gradient_accumulation_steps"], eta_min=configs["lr"] / 10)
+    scheduler_classifier = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_classifier, T_max=len(train_loader) / configs["gradient_accumulation_steps"], eta_min=configs["classifier_lr"] / 10)
     best_val_acc = -1
     epochs = configs["num_epochs"]
     for epoch in tqdm.tqdm(range(epochs)):
@@ -152,7 +152,10 @@ if __name__ == "__main__":
     # get configs
     with open(config_path, 'r') as file:
         configs = yaml.safe_load(file)
-    exp_id = input("Identifier for experiment: ")
+    if "EXP_ID" in os.environ:
+        exp_id = os.environ["EXP_ID"]
+    else:
+        exp_id = input("Identifier for experiment: ")
     if len(exp_id) == 0:
         exp_id = exp_type
     else:

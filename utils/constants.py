@@ -167,6 +167,7 @@ DESCRIPTIONS = {
         "The surface feels hard, exhibits a notable roughness, and there are big bumps along the bristles.",
     ],
     'physiclear_microfiber_cloth': [
+        # "The surface feels yielding, has a subtle roughness and there are small irregularities and bumps.",
         "The surface feels somewhat yielding, has a subtle roughness and there are small irregularities and bumps.",
     ],
     'physiclear_millet': [
@@ -209,6 +210,7 @@ DESCRIPTIONS = {
         "The surface feels somewhat firm and flexible, exhibits a slight roughness and there are big bumps on the surface.",
     ],
     'physiclear_clothes_peg': [
+        # "The surface feels hard and solid, exhibits a lack of roughness and there are no textural variations or fine ridges.",
         "The surface feels hard and solid, exhibits a slight roughness and there are no textural variations or fine ridges.",
     ],
     'physiclear_tomato': [
@@ -266,6 +268,7 @@ DESCRIPTIONS = {
         "The surface feels moderately soft, exhibits a slight roughness and there are tiny bumps present.",
     ],
     'physiclear_bath_towel': [
+        # "The surface feels soft and flexible, is notably rough and there are small bumps due to the weave.",
         "The surface feels moderately soft and flexible, is notably rough and there are small bumps due to the weave.",
     ],
     'physiclear_oven_mitt': [
@@ -399,6 +402,8 @@ HARDNESS_RANK = {
     'physiclear_stress_ball': 0,
     'physiclear_feather_duster': 0,
     'physiclear_nylon_shirt': 1,
+    # 'physiclear_microfiber_cloth': 0,
+    # 'physiclear_bath_towel': 0,
     'physiclear_microfiber_cloth': 1,
     'physiclear_bath_towel': 1,
     'physiclear_gauze_pad': 1,
@@ -510,7 +515,6 @@ ROUGHNESS_RANK = {
     'physiclear_controller_shoulderpads': 0,
     'physiclear_lanyard_string': 0,
     'physiclear_bread_knife_handle': 2,
-
     'physiclear_toilet_paper': 1,
     'physiclear_sponge_soft': 1,
     'physiclear_paper_towel': 1,
@@ -524,6 +528,7 @@ ROUGHNESS_RANK = {
     'physiclear_masking_tape': 1,
     'physiclear_aluminium_foil': 1,
     'physiclear_tennis_ball': 1,
+    # 'physiclear_clothes_peg': 0,
     'physiclear_clothes_peg': 1,
     'physiclear_controller_stick': 1,
     'physiclear_rubber_slippers': 1,
@@ -533,7 +538,6 @@ ROUGHNESS_RANK = {
     'physiclear_denim': 1,
     'physiclear_pen_pad': 1,
     'physiclear_baseball': 2,
-
     'physiclear_basket': 2,
     'physiclear_bubble_wrap': 2,
     'physiclear_insulating_holder': 2,

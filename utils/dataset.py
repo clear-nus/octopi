@@ -13,37 +13,6 @@ import random
 import json
 from utils.constants import *
 
-
-def simulate_directional_lighting(img, r_factor, g_factor, b_factor):
-    """
-    Simulates changes in directional lighting for GelSight sensors by scaling 
-    RGB channels independently. This mimics variations in LED intensity.
-    """
-    bands = img.split()
-    if len(bands) >= 3:
-        r, g, b = bands[0], bands[1], bands[2]
-        r = TF.adjust_brightness(r, r_factor)
-        g = TF.adjust_brightness(g, g_factor)
-        b = TF.adjust_brightness(b, b_factor)
-        return Image.merge("RGB", (r, g, b))
-    return img
-
-
-def horizontal_flip_with_color_swap(img):
-    """
-    Flips image horizontally and swaps Red/Blue channels.
-    ASSUMPTION: Sensor has symmetric Red (Right) and Blue (Left) lighting.
-    If your sensor is triangular (e.g. GelSight Mini), this is physically incorrect.
-    """
-    img = TF.hflip(img)
-    bands = img.split()
-    if len(bands) >= 3:
-        r, g, b = bands[0], bands[1], bands[2]
-        # Swap Red and Blue
-        return Image.merge("RGB", (b, g, r))
-    return img
-
-
 def get_frames(frames_path, image_processor, transforms_image, max_length=5, skip=True, return_indices=False):
     # get relevant object(s) and their frames
     tactile_tensors = []
@@ -127,24 +96,10 @@ class CLIPPropertyUniqueDataset(Dataset):
         # load tactile info
         transform_list = []
         if self.split_name == "train":
-            # GelSight Mini Layout (From Photo): Top(Green), Right(Red), Left(Blue).
             if random.random() < self.flip_p:
-                transform_list.append(transforms.Lambda(lambda img: horizontal_flip_with_color_swap(img)))
-            # Small rotations (+/- 15 deg) are okay.
-            if random.random() < 0.5:
-                angle = random.uniform(-15, 15)
-                transform_list.append(transforms.Lambda(lambda img, a=angle: TF.rotate(img, a)))
-            if random.random() < 0.5:
-                brightness = random.uniform(0.9, 1.1)
-                contrast = random.uniform(0.9, 1.1)
-                transform_list.append(transforms.Lambda(lambda img, b=brightness: TF.adjust_brightness(img, b)))
-                transform_list.append(transforms.Lambda(lambda img, c=contrast: TF.adjust_contrast(img, c)))
-            if random.random() < 0.5:
-                # Directional Lighting: Scale RGB channels independently
-                r_f = random.uniform(0.8, 1.2)
-                g_f = random.uniform(0.8, 1.2)
-                b_f = random.uniform(0.8, 1.2)
-                transform_list.append(transforms.Lambda(lambda img, r=r_f, g=g_f, b=b_f: simulate_directional_lighting(img, r, g, b)))
+                transform_list.append(transforms.RandomHorizontalFlip(1))
+            if random.random() < self.flip_p:
+                transform_list.append(transforms.RandomVerticalFlip(1))
             transforms_image = transforms.Compose(transform_list)
         else:
             transforms_image = None
@@ -180,24 +135,10 @@ class TactileLLMDataset(Dataset):
         # NOTE: ignore BOS tokens
         transform_list = []
         if self.split_name == "train":
-            # GelSight Mini Layout (From Photo): Top(Green), Right(Red), Left(Blue).
             if random.random() < self.flip_p:
-                transform_list.append(transforms.Lambda(lambda img: horizontal_flip_with_color_swap(img)))
-            # Small rotations (+/- 15 deg) are okay.
-            if random.random() < 0.5:
-                angle = random.uniform(-15, 15)
-                transform_list.append(transforms.Lambda(lambda img, a=angle: TF.rotate(img, a)))
-            if random.random() < 0.5:
-                brightness = random.uniform(0.9, 1.1)
-                contrast = random.uniform(0.9, 1.1)
-                transform_list.append(transforms.Lambda(lambda img, b=brightness: TF.adjust_brightness(img, b)))
-                transform_list.append(transforms.Lambda(lambda img, c=contrast: TF.adjust_contrast(img, c)))
-            if random.random() < 0.5:
-                # Directional Lighting: Scale RGB channels independently
-                r_f = random.uniform(0.8, 1.2)
-                g_f = random.uniform(0.8, 1.2)
-                b_f = random.uniform(0.8, 1.2)
-                transform_list.append(transforms.Lambda(lambda img, r=r_f, g=g_f, b=b_f: simulate_directional_lighting(img, r, g, b)))
+                transform_list.append(transforms.RandomHorizontalFlip(1))
+            if random.random() < self.flip_p:
+                transform_list.append(transforms.RandomVerticalFlip(1))
             transforms_image = transforms.Compose(transform_list)
         else:
             transforms_image = None
