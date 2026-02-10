@@ -1,6 +1,6 @@
 data_dir: data
 cuda: 0
-seed: 0
+seed: 1
 exps_path: exps
 flip_p: 0.5
 use_clip: openai/clip-vit-large-patch14

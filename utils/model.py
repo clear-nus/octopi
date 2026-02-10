@@ -13,7 +13,7 @@ class CLIPTactileEncoder(nn.Module):
         b, l, c, h, w = tactile_embeds.shape # (b, l, c, h, w)
         tactile_embeds = tactile_embeds.reshape(b * l, c, h, w) # (b * l, c, h, w)
         tactile_forward_outs = self.model(tactile_embeds, output_hidden_states=True)
-        tactile_features = tactile_forward_outs.hidden_states[-2][:, 0].to(tactile_embeds.dtype) 
+        tactile_features = tactile_forward_outs.hidden_states[-1][:, 0].to(tactile_embeds.dtype) 
         _, patch_embed_size = tactile_features.shape
         tactile_features = tactile_features.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
         return tactile_features

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Array of seeds to test
-SEEDS=(0 1 2)
+SEEDS=(0 1)
 
 # Path to config file
 CLIP_CONFIG_FILE="configs/train_clip_config.yaml"

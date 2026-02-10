@@ -10,7 +10,7 @@ flip_p: 0.5
 use_vqvae: false
 use_clip: openai/clip-vit-large-patch14
 freeze_encoder: true
-encoder_path: exps/2026_02_05_04_40_12_train_clip_clip_seed_0/encoder.pt
+encoder_path: exps/2026_02_06_17_41_21_train_clip_clip_seed_0/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
 prompt_depth_vision: 12
@@ -19,25 +19,25 @@ num_context_text: 4
 prompt_depth_text: 12
 dim_context_text: 768
 freeze_projection: false
-projection_lr: 2.0e-05
-projection_path: null
+projection_lr: 0.0002
+projection_path: exps/2026_02_06_19_42_01_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0/best_project.pt
 train_files:
-- /home/samson/octopi/data/train_qa.json
+- /data/samson/octopi/data/train_qa.json
 val_files:
-- /home/samson/octopi/data/val_opd_qa.json
-- /home/samson/octopi/data/val_qa.json
+- /data/samson/octopi/data/val_opd_qa.json
+- /data/samson/octopi/data/val_qa.json
 test_files:
-- /home/samson/octopi/data/test_opd_qa.json
-- /home/samson/octopi/data/test_qa.json
+- /data/samson/octopi/data/test_opd_qa.json
+- /data/samson/octopi/data/test_qa.json
 model_type: vicuna-7b
 cutoff_len: 512
 offload_dir: ./
 llm_lr: 0.0002
 quantized: false
-tokenizer_path: null
-llm_path: null
+tokenizer_path: exps/2026_02_06_19_42_01_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0/tokenizer
+llm_path: exps/2026_02_06_19_42_01_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0/best_llm_weights.pt
 lora_trained: false
-use_lora: false
+use_lora: true
 lora_alpha: 256
 r: 128
 lora_dropout: 0.05
@@ -52,11 +52,11 @@ target_modules:
 modules_to_save:
 - embed_tokens
 bias: none
-max_train_steps: 8000
+max_train_steps: 3000
 per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
-warmup_steps: 0.03
-val_freq: 2000
+warmup_steps: 0.05
+val_freq: 300
 val_subset_size: 200
 per_device_val_batch_size: 1
 max_new_tokens:

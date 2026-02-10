@@ -57,8 +57,8 @@ for SEED in "${SEEDS[@]}"; do
     # Pass seed as experiment identifier
     export EXP_ID="full_pipeline_${SEED}"
     
-    echo "Running train_llm.py (Stage 1)..."
-    python train_llm.py
+    # echo "Running train_llm.py (Stage 1)..."
+    # python train_llm.py
     
     # Find output dir of Stage 1
     # We look for the most recent directory ending in _full_pipeline_$SEED
@@ -84,7 +84,7 @@ for SEED in "${SEEDS[@]}"; do
         --key modules_to_save --value "[embed_tokens]" \
         --key projection_lr --value 0.0002 \
         --key llm_lr --value 0.0002 \
-        --key warmup_steps --value 0.1 \
+        --key warmup_steps --value 0.05 \
         --key r --value 128 \
         --key lora_alpha --value 256 \
         --key lora_dropout --value 0.05 \

@@ -539,8 +539,8 @@ def train(configs, exp_name, g):
 
     # test
     if configs["test"]:
-        if configs["train"]:
-            run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_final")
+        # if configs["train"]:
+        #     run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_final")
         # Reload best model if we just trained and validated
         if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
             print(f"\nReloading best model from validation for testing...")
