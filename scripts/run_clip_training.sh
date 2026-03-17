@@ -1,7 +1,10 @@
 #!/bin/bash
 
+export HTTP_PROXY=http://127.0.0.1:1087
+export HTTPS_PROXY=http://127.0.0.1:1087
+
 # Array of seeds to test
-SEEDS=(0 1)
+SEEDS=(0 1 2 3 4)
 
 # Path to config file
 CLIP_CONFIG_FILE="configs/train_clip_config.yaml"
@@ -17,16 +20,18 @@ for SEED in "${SEEDS[@]}"; do
     echo "Cleaning up data directory..."
     rm -rf "$DATA_DIR"
     echo "Generating data for seed $SEED in $DATA_DIR..."
-    python utils/process_dataset.py --dataset_path "$DATASET_PATH" --output_path "$DATA_DIR" --seed "$SEED"
-    
-    # 2. Train Encoder
+    python src/utils/process_dataset.py --dataset_path "$DATASET_PATH" --output_path "$DATA_DIR" --seed "$SEED"
+    python src/utils/generate_qa.py --data_path "$DATA_DIR" --seed "$SEED"
+
+    # 1.5 Train Encoder
+    CLIP_CONFIG_FILE="configs/train_clip_config.yaml"
     echo "Training Encoder..."
-    python utils/update_config.py --config_path "$CLIP_CONFIG_FILE" \
+    python src/utils/update_config.py --config_path "$CLIP_CONFIG_FILE" \
         --key data_dir --value "$DATA_DIR" \
-        --key seed --value "$SEED"
+        --key seed --value "$SEED" \
     
     export EXP_ID="clip_seed_${SEED}"
-    python train_clip.py
+    python src/train_clip.py
     
     echo "----------------------------------------------------------------"
     echo "Finished CLIP training for seed: $SEED"

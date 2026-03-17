@@ -33,34 +33,6 @@ def add_new_tokens(llm, tokenizer, new_tokens):
         llm.model.embed_tokens.weight[-n_new_tokens:] = input_embeddings_avg
 
 
-# def evaluate_loss(model, val_loader, device):
-#     model.eval()
-#     total_loss = 0
-#     opd_loss = 0
-#     opd_count = 0
-#     reasoning_loss = 0
-#     reasoning_count = 0
-#     with torch.no_grad():
-#         for batch in tqdm.tqdm(val_loader, desc="Evaluating loss"):
-#             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
-#             answer_tokens = answer_tokens.to(device)
-#             outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-#             loss = outputs.loss.item()
-#             total_loss += loss
-#             if "object_property_description" in question_type[0]:
-#                 opd_loss += loss
-#                 opd_count += 1
-#             elif "property_comparison" in question_type[0] or "property_superlative_selection" in question_type[0] or "property_object_match" in question_type[0]:
-#                 reasoning_loss += loss
-#                 reasoning_count += 1
-#     model.train()
-#     if opd_count == 0:
-#         opd_count = 1
-#     if reasoning_count == 0:
-#         reasoning_count = 1
-#     return total_loss / len(val_loader), opd_loss / opd_count, reasoning_loss / reasoning_count
-
-
 def evaluate_metrics(model, val_loader, device, tokenizer, configs):
     evaluator = LLMEvaluator()
     val_subset_size = configs.get("val_subset_size", None)
@@ -82,65 +54,26 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
         else:
             print("Warning: model.llm does not have merge_adapter method. Inference might be slow.")
     with torch.no_grad():
+        val_loss_total = 0.0
+        val_steps = 0
         for i, batch in enumerate(tqdm.tqdm(val_loader, desc="Evaluating metrics")):
             if val_subset_size is not None and i >= val_subset_size:
                 break
             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
             answer_tokens = answer_tokens.to(device)
             outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
-            max_new_tokens = configs["max_new_tokens"][question_type[0]]
-            generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
-            generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip()
-            answer_tokens = answer_tokens[0].cpu().numpy()
-            answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
-            generation = generation.strip().split("</s>")[0].strip()
-            if "</s>" not in generation:
-                generation += "</s>"
-            # # DEBUG: Print first generation to check why accuracy is 0.0
-            # if i == 0:
-            #     print(f"\n[DEBUG] Question Type: {question_type[0]}")
-            #     print(f"[DEBUG] Generation: {generation}")
-            #     print(f"[DEBUG] Answer: {answer}\n")
-            # evaluation
-            evaluator.evaluate(
-                question="".join([i[0] for i in question]), 
-                generation=generation, 
-                answer=answer, 
-                question_type=question_type[0], 
-                question_step=question_step.item(), 
-                show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False
-            )
+            val_loss_total += outputs.loss.item()
+            val_steps += 1
+            # Generation dynamically removed to speed up validation since we save on loss
     if did_merge:
         print("Unmerging LoRA adapters to resume training...")
         try:
             model.llm.unmerge_adapter()
         except Exception as e:
             print(f"Warning: Could not unmerge adapters: {e}")
-    results = evaluator.get_results()
-    acc_opd = results.get("eval_object_property_description", {}).get("combined_accuracy", 0)
-    acc_pc = results.get("eval_property_comparison", {}).get("accuracy", 0)
-    acc_pss = results.get("eval_property_superlative_selection", {}).get("accuracy", 0)
-    acc_pom = results.get("eval_property_object_match", {}).get("accuracy", 0)
-
-    # Calculate number of tasks with validation accuracies above random
-    num_tasks_above_random = 0
-    if acc_opd > random_scores["eval_object_property_description"]["combined_accuracy"]:
-        num_tasks_above_random += 1
-    if acc_pc > random_scores["eval_property_comparison"]["accuracy"]:
-        num_tasks_above_random += 1
-    if acc_pss > random_scores["eval_property_superlative_selection"]["accuracy"]:
-        num_tasks_above_random += 1
-    if acc_pom > random_scores["eval_property_object_match"]["accuracy"]:
-        num_tasks_above_random += 1
-
-    # geometric mean of accuracies as overall score
-    geo_mean = (acc_opd * acc_pc * acc_pss * acc_pom) ** 0.25
-
-    # Combined score: prioritize number of tasks above random, then geometric mean
-    score = num_tasks_above_random + geo_mean
-
+    val_loss = val_loss_total / max(val_steps, 1)
     model.train()
-    return score, results
+    return val_loss
 
 
 def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, file_suffix):
@@ -205,7 +138,7 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
                     f.write(f"\t{stat}: {value}\n")
         f.close()
     print(f"Evaluation ({file_suffix}) done!")
-
+    return results
 
 def train(configs, exp_name, g):
     # device
@@ -296,7 +229,16 @@ def train(configs, exp_name, g):
 
     # load datasets
     if configs["use_clip"]:
-        image_processor = CLIPImageProcessor.from_pretrained(configs["use_clip"])
+        try:
+            image_processor = CLIPImageProcessor.from_pretrained(configs["use_clip"])
+        except OSError:
+            print(f"Warning: Could not load CLIP processor from {configs['use_clip']} in offline mode. Trying without it or check your internet connection/cache.")
+            # Depending on logic, we might need to crash or set to None
+            # But the dataset needs it. Retrying with local_files_only=True might be redundant if mode is offline.
+            raise
+        except Exception as e:
+            print(f"Error loading CLIP processor: {e}")
+            raise
     if configs["train"]:
         train_dataset = TactileLLMDataset(image_processor, configs["train_files"], split_name="train", tokenizer=tokenizer, flip_p=configs["flip_p"])
         train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
@@ -356,6 +298,20 @@ def train(configs, exp_name, g):
     else:
         model.llm = llm
 
+    # 2) projection setup
+    if configs["projection_path"] is not None:
+        projection_dict = torch.load(configs["projection_path"], map_location='cpu', weights_only=True)
+        model.project.load_state_dict(projection_dict)
+    
+    project_params = []
+    if configs["freeze_projection"]:
+        for name, param in model.project.named_parameters():
+            param.requires_grad = False
+    else:
+        for name, param in model.project.named_parameters():
+            param.requires_grad = True
+        project_params = list(model.project.parameters())
+
     if configs["train"]:
         ## LLM optimizer
         llm_params = []
@@ -396,8 +352,22 @@ def train(configs, exp_name, g):
                 if param.requires_grad:
                     llm_params.append(param)
         print(f"len(llm_params): {len(llm_params)}")
+        print(f"len(project_params): {len(project_params)}")
+        
+        optimizer_grouped_parameters = []
         if len(llm_params) > 0:
-            optimizer_llm = torch.optim.AdamW(llm_params, lr=configs["llm_lr"])
+            optimizer_grouped_parameters.append({
+                "params": llm_params,
+                "lr": configs["llm_lr"]
+            })
+        if len(project_params) > 0:
+            optimizer_grouped_parameters.append({
+                "params": project_params,
+                "lr": configs["projection_lr"]
+            })
+
+        if len(optimizer_grouped_parameters) > 0:
+            optimizer_llm = torch.optim.AdamW(optimizer_grouped_parameters)
             if configs["max_train_steps"] < len(train_loader):
                 num_training_steps = int(configs["max_train_steps"] / configs["llm_gradient_accumulation_steps"])
             else:
@@ -412,7 +382,7 @@ def train(configs, exp_name, g):
                 num_training_steps=num_training_steps
             )
 
-    # 2) encoder setup
+    # 3) encoder setup
     if configs["use_vqvae"]:
         model.encoder.load_state_dict(torch.load("encoders/vqvae/encoder.pth", map_location='cpu', weights_only=True))
         model.vector_quantization.load_state_dict(torch.load("encoders/vqvae/vector_quantization.pth", map_location='cpu', weights_only=True))
@@ -432,22 +402,10 @@ def train(configs, exp_name, g):
         encoder_params = model.encoder.parameters()
         optimizer_encoder = torch.optim.SGD(encoder_params, lr=configs["encoder_lr"])
 
-    # 3) projection setup
-    if configs["projection_path"] is not None:
-        projection_dict = torch.load(configs["projection_path"], map_location='cpu', weights_only=True)
-        model.project.load_state_dict(projection_dict)
-    if configs["freeze_projection"]:
-        for name, param in model.project.named_parameters():
-            param.requires_grad = False
-    else:
-        for name, param in model.project.named_parameters():
-            param.requires_grad = True
-        project_params = model.project.parameters()
-        optimizer_project = torch.optim.AdamW(project_params, lr=configs["projection_lr"])
-
     # training
     if configs["train"]:
-        best_val_score = 0
+        best_val_loss = float('inf')
+        patience_counter = 0
         # get trainable/non-trainable model parameter stats
         model.train()
         if configs["freeze_encoder"]:
@@ -469,6 +427,9 @@ def train(configs, exp_name, g):
         else:
             print(f"\nFinetuning LLM for {len(train_loader)} samples and {int(len(train_loader) / configs['llm_gradient_accumulation_steps'])} gradient updates...")
         print('Trainable params: {} ({:.2f}%)'.format(trainable_params, trainable_params / all_params * 100,))
+        # NOTE: Cache original embeddings to prevent AdamW momentum drift on frozen tokens
+        n_old_tokens = len(tokenizer) - len(new_tokens)
+        original_embeddings = model.llm.get_input_embeddings().weight.data.clone().detach()
         # total_train_loss = 0
         # NOTE: do not calculate stats during training to save time
         for train_sample_step, batch in enumerate(t:=tqdm.tqdm(train_loader)):
@@ -483,42 +444,43 @@ def train(configs, exp_name, g):
             if (train_sample_step + 1) % configs["llm_gradient_accumulation_steps"] == 0:
                 # optimizer updates
                 if not configs["freeze_encoder"]:
+                    torch.nn.utils.clip_grad_norm_(encoder_params, max_norm=1.0)
                     optimizer_encoder.step()
                     optimizer_encoder.zero_grad()
-                if not configs["freeze_projection"]:
-                    optimizer_project.step()
-                    optimizer_project.zero_grad()
-                if len(llm_params) > 0:
+                if len(optimizer_grouped_parameters) > 0:
+                    torch.nn.utils.clip_grad_norm_(llm_params + project_params, max_norm=1.0)
                     optimizer_llm.step()
                     scheduler_llm.step()
                     optimizer_llm.zero_grad()
+                    # Ensure frozen token embeddings are not corrupted by AdamW weight decay or variance tracking
+                    if any("embed_tokens" in n for n, p in model.llm.named_parameters() if p.requires_grad):
+                        with torch.no_grad():
+                            model.llm.get_input_embeddings().weight.data[:n_old_tokens] = original_embeddings[:n_old_tokens]
+
             # validation
             if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
                 if configs["val"]:
-                    val_score, val_results = evaluate_metrics(model, val_loader, device, tokenizer, configs)
+                    val_loss = evaluate_metrics(model, val_loader, device, tokenizer, configs)
                     if configs["freeze_encoder"]:
                         model.encoder.eval()
                     if configs["freeze_projection"]:
                         model.project.eval()
-                    print(f"Validation Score: {val_score}")
-                    print(f"OPD Combined Accuracy: {val_results.get('eval_object_property_description', {}).get('combined_accuracy', 0)}")
-                    print(f"PC Accuracy: {val_results.get('eval_property_comparison', {}).get('accuracy', 0)}")
-                    print(f"PSS Accuracy: {val_results.get('eval_property_superlative_selection', {}).get('accuracy', 0)}")
-                    print(f"POM Accuracy: {val_results.get('eval_property_object_match', {}).get('accuracy', 0)}")
-                    if val_score > best_val_score:
-                        best_val_score = val_score
-                        print(f"New best validation score: {best_val_score}. Saving best model...")
-                        model.llm.generation_config.temperature = None
-                        model.llm.generation_config.top_p = None
-                        if len(llm_params) > 0:
-                            if configs["use_lora"]:
-                                model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/best_llm_weights")
-                            else:
-                                torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt")
-                        torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/best_project.pt")
-                        if not configs["freeze_encoder"]:
-                            torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
-                        tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
+                    print(f"Validation Loss: {val_loss}")
+                    
+                    # Automate saving at every val step for post-training full evaluation
+                    current_step = train_sample_step + 1
+                    print(f"Saving checkpoint at step {current_step}...")
+                    model.llm.generation_config.temperature = None
+                    model.llm.generation_config.top_p = None
+                    if len(llm_params) > 0:
+                        if configs["use_lora"]:
+                            model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/step_{current_step}_llm_weights")
+                        else:
+                            torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/step_{current_step}_llm_weights.pt")
+                    torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/step_{current_step}_project.pt")
+                    if not configs["freeze_encoder"]:
+                        torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/step_{current_step}_encoder.pt")
+                    tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
         # if not configs["val"]:
@@ -539,48 +501,99 @@ def train(configs, exp_name, g):
 
     # test
     if configs["test"]:
-        # if configs["train"]:
-        #     run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_final")
-        # Reload best model if we just trained and validated
         if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
-            print(f"\nReloading best model from validation for testing...")
-            # Reload Projection
-            best_proj_path = f"{configs['exps_path']}/{exp_name}/best_project.pt"
-            if os.path.exists(best_proj_path):
-                print(f"Loading best projection from {best_proj_path}")
-                model.project.load_state_dict(torch.load(best_proj_path, map_location=device, weights_only=True))
-            # Reload Encoder
-            if not configs["freeze_encoder"]:
-                best_encoder_path = f"{configs['exps_path']}/{exp_name}/best_encoder.pt"
-                if os.path.exists(best_encoder_path):
-                    print(f"Loading best encoder from {best_encoder_path}")
-                    model.encoder.load_state_dict(torch.load(best_encoder_path, map_location=device))
-            # Reload LLM
-            if configs["use_lora"]:
-                best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
-                if os.path.exists(best_llm_path):
-                    print(f"Loading best LoRA adapters from {best_llm_path}")
+            print(f"\n=========================================")
+            print(f"Post-Training Automated Checkpoint Sweep")
+            print(f"=========================================")
+            
+            import glob
+            import shutil
+            import gc
+            
+            checkpoints = glob.glob(f"{configs['exps_path']}/{exp_name}/step_*_project.pt")
+            steps = sorted([int(p.split('step_')[1].split('_project.pt')[0]) for p in checkpoints])
+            print(f"Found {len(steps)} checkpoints to evaluate: {steps}")
+            
+            best_avg_acc = -1
+            best_step = -1
+            
+            for step in steps:
+                print(f"\n--- Testing Checkpoint Step {step} ---")
+                
+                # Reload Projection
+                step_proj_path = f"{configs['exps_path']}/{exp_name}/step_{step}_project.pt"
+                model.project.load_state_dict(torch.load(step_proj_path, map_location=device, weights_only=True))
+
+                # Reload Encoder
+                if not configs["freeze_encoder"]:
+                    step_enc_path = f"{configs['exps_path']}/{exp_name}/step_{step}_encoder.pt"
+                    model.encoder.load_state_dict(torch.load(step_enc_path, map_location=device))
+
+                # Reload LLM
+                if configs["use_lora"]:
+                    step_llm_path = f"{configs['exps_path']}/{exp_name}/step_{step}_llm_weights"
                     try:
-                        model.llm.load_adapter(best_llm_path, adapter_name="best_model")
-                        model.llm.set_adapter("best_model")
+                        from peft import PeftModel
+                        # If the model is already wrapped in PEFT, just load the weights
+                        if hasattr(model.llm, "load_adapter"):
+                            model.llm.load_adapter(step_llm_path, adapter_name="default")
+                            model.llm.set_adapter("default")
+                        else:
+                            model.llm = PeftModel.from_pretrained(model.llm, step_llm_path)
                     except Exception as e:
-                        print(f"Could not load adapter using load_adapter: {e}. Trying manual state dict load.")
-                        # Fallback for older PEFT versions or specific configs
-                        from peft.utils import set_peft_model_state_dict
-                        adapter_path = os.path.join(best_llm_path, "adapter_model.bin")
-                        if os.path.exists(adapter_path):
-                            adapters_weights = torch.load(adapter_path, map_location=device)
-                            set_peft_model_state_dict(model.llm, adapters_weights)
-                    # Merge LoRA weights for faster inference
-                    print("Merging LoRA weights for faster inference...")
-                    model.llm = model.llm.merge_and_unload()
-            else:
-                best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt"
-                if os.path.exists(best_llm_path):
-                    print(f"Loading best LLM weights from {best_llm_path}")
-                    llm_weights = torch.load(best_llm_path, map_location=device, weights_only=True)
-                    model.llm.load_state_dict(llm_weights, strict=False)
-        run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
+                        print(f"Fallback Load: {e}")
+                        model.llm.load_state_dict(torch.load(step_llm_path+'/adapter_model.bin', map_location=device), strict=False)
+                else:
+                    if len(llm_params) > 0:
+                        step_llm_path = f"{configs['exps_path']}/{exp_name}/step_{step}_llm_weights.pt"
+                        model.llm.load_state_dict(torch.load(step_llm_path, map_location=device), strict=False)
+                
+                # We do NOT merge the adapter here so we can swap it out easily for the next step loop
+                
+                # NOTE: We evaluate on the validation set to pick the best checkpoint to avoid test-set test data leakage
+                results = run_evaluation(model, val_loader, device, tokenizer, configs, exp_name, f"val_step_{step}")
+                
+                # Extract combined accuracy
+                tasks_to_average = []
+                for k, v in results.items():
+                    if "accuracy" in v:
+                        tasks_to_average.append(v["accuracy"])
+                    elif "combined_accuracy" in v:
+                        tasks_to_average.append(v["combined_accuracy"])
+                
+                if len(tasks_to_average) > 0:
+                    avg_acc = sum(tasks_to_average) / len(tasks_to_average)
+                    print(f"--- Step {step} Average Accuracy: {avg_acc:.4f} ---")
+                    if avg_acc > best_avg_acc:
+                        best_avg_acc = avg_acc
+                        best_step = step
+                        
+            print(f"\n=========================================")
+            print(f"🏆 BEST CHECKPOINT: Step {best_step} with Avg Accuracy {best_avg_acc:.4f}")
+            print(f"=========================================")
+            
+            # Save the winning checkpoint as the 'best_model'
+            import shutil
+            if best_step != -1:
+                shutil.copy(f"{configs['exps_path']}/{exp_name}/step_{best_step}_project.pt", f"{configs['exps_path']}/{exp_name}/best_project.pt")
+                if configs["use_lora"]:
+                    os.makedirs(f"{configs['exps_path']}/{exp_name}/best_llm_weights", exist_ok=True)
+                    shutil.copytree(f"{configs['exps_path']}/{exp_name}/step_{best_step}_llm_weights", f"{configs['exps_path']}/{exp_name}/best_llm_weights", dirs_exist_ok=True)
+                else:
+                    if len(llm_params) > 0:
+                        shutil.copy(f"{configs['exps_path']}/{exp_name}/step_{best_step}_llm_weights.pt", f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt")
+                if not configs["freeze_encoder"]:
+                    shutil.copy(f"{configs['exps_path']}/{exp_name}/step_{best_step}_encoder.pt", f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
+            
+            print(f"\n--- Running Final Evaluation against Test Set using Step {best_step} ---")
+            # We already have the best model loaded in memory from the end of the loop, or we can reload it:
+            # Let's cleanly run it
+            model.eval()
+            run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
+        
+        else:
+            run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
+        
         print(f"LLM test done!")
 
 

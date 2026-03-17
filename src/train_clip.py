@@ -13,7 +13,7 @@ import random
 import yaml
 from datetime import datetime
 import sys
-from transformers import CLIPImageProcessor
+from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup
 from transformers.utils import logging
 
 
@@ -27,7 +27,11 @@ class PropertyClassifierEvaluator:
 
 def main(configs, exp_name, g, device):
     # data
-    image_processor = CLIPImageProcessor.from_pretrained(configs["use_clip"])
+    try:
+        image_processor = CLIPImageProcessor.from_pretrained(configs["use_clip"])
+    except Exception as e:
+        print(f"Failed to load CLIP ImageProcessor: {e}. Ensure you have internet access or the model is cached/downloaded.")
+        raise
     train_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="train", flip_p=configs["flip_p"])
     val_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="val")
     test_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="test")
@@ -54,8 +58,15 @@ def main(configs, exp_name, g, device):
     loss_fn = torch.nn.CrossEntropyLoss()
     optimizer_clip = torch.optim.AdamW(vificlip.parameters(), lr=configs["lr"])
     optimizer_classifier = torch.optim.AdamW(classifier.parameters(), lr=configs["classifier_lr"])
-    scheduler_clip = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_clip, T_max=len(train_loader) / configs["gradient_accumulation_steps"], eta_min=configs["lr"] / 10)
-    scheduler_classifier = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_classifier, T_max=len(train_loader) / configs["gradient_accumulation_steps"], eta_min=configs["classifier_lr"] / 10)
+    # Calculate total steps across all epochs
+    total_steps = (len(train_loader) / configs["gradient_accumulation_steps"]) * configs["num_epochs"]
+    warmup_steps = int(configs.get("warmup_ratio", 0.05) * total_steps) # Default to 5% warmup
+    scheduler_clip = get_cosine_schedule_with_warmup(
+        optimizer_clip, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    )
+    scheduler_classifier = get_cosine_schedule_with_warmup(
+        optimizer_classifier, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    )
     best_val_acc = -1
     epochs = configs["num_epochs"]
     for epoch in tqdm.tqdm(range(epochs)):

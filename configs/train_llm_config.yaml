@@ -1,6 +1,6 @@
 data_dir: data
 gpu_config: configs/gpu_config_7b.json
-cuda: 0
+cuda: 3
 seed: 0
 exps_path: exps
 train: true
@@ -10,17 +10,17 @@ flip_p: 0.5
 use_vqvae: false
 use_clip: openai/clip-vit-large-patch14
 freeze_encoder: true
-encoder_path: exps/2026_02_06_17_41_21_train_clip_clip_seed_0/encoder.pt
+encoder_path: exps/2026_03_12_11_28_21_train_clip_clip_seed_0/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
-prompt_depth_vision: 12
+prompt_depth_vision: 8
 dim_context_vision: 1024
 num_context_text: 4
 prompt_depth_text: 12
 dim_context_text: 768
 freeze_projection: false
 projection_lr: 0.0002
-projection_path: exps/2026_02_06_19_42_01_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0/best_project.pt
+projection_path: null
 train_files:
 - /data/samson/octopi/data/train_qa.json
 val_files:
@@ -34,30 +34,25 @@ cutoff_len: 512
 offload_dir: ./
 llm_lr: 0.0002
 quantized: false
-tokenizer_path: exps/2026_02_06_19_42_01_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0/tokenizer
-llm_path: exps/2026_02_06_19_42_01_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0/best_llm_weights.pt
+tokenizer_path: null
+llm_path: null
 lora_trained: false
-use_lora: true
-lora_alpha: 256
-r: 128
+use_lora: false
+lora_alpha: 64
+r: 32
 lora_dropout: 0.05
 target_modules:
 - q_proj
 - v_proj
-- o_proj
-- k_proj
-- up_proj
-- down_proj
-- gate_proj
 modules_to_save:
 - embed_tokens
 bias: none
-max_train_steps: 3000
+max_train_steps: 8000
 per_device_train_batch_size: 1
-llm_gradient_accumulation_steps: 16
-warmup_steps: 0.05
-val_freq: 300
-val_subset_size: 200
+llm_gradient_accumulation_steps: 32
+warmup_steps: 10
+val_freq: 800
+val_subset_size: null
 per_device_val_batch_size: 1
 max_new_tokens:
   train_object_property_description: 100

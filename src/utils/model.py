@@ -13,7 +13,8 @@ class CLIPTactileEncoder(nn.Module):
         b, l, c, h, w = tactile_embeds.shape # (b, l, c, h, w)
         tactile_embeds = tactile_embeds.reshape(b * l, c, h, w) # (b * l, c, h, w)
         tactile_forward_outs = self.model(tactile_embeds, output_hidden_states=True)
-        tactile_features = tactile_forward_outs.hidden_states[-1][:, 0].to(tactile_embeds.dtype) 
+        # Best Practice: Use Layer -2 CLS token to match LLM input
+        tactile_features = tactile_forward_outs.hidden_states[-2][:, 0].to(tactile_embeds.dtype) 
         _, patch_embed_size = tactile_features.shape
         tactile_features = tactile_features.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
         return tactile_features
@@ -68,7 +69,8 @@ class ViFiCLIP(nn.Module):
         tactile_frames = tactile_frames.reshape(b * l, c, h, w) # (b * l, c, h, w)
         # Best Practice: Use Layer -2 CLS token to match LLM input
         vision_outputs = self.clip_model.vision_model(tactile_frames, output_hidden_states=True)
-        pooled_output = vision_outputs.pooler_output # (b * l, patch_embed_size)
+        # pooled_output = vision_outputs.pooler_output # (b * l, patch_embed_size)
+        pooled_output = vision_outputs.hidden_states[-2][:, 0].to(tactile_frames.dtype) # Use layer -2 CLS token
         _, patch_embed_size = pooled_output.shape
         pooled_output = pooled_output.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
         # add sinusoidal positional embedding

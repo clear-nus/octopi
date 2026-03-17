@@ -9,7 +9,13 @@ class PromptLearningCLIPEncoderLayer(CLIPEncoderLayer):
     def __init__(self, config, configs, text_layer, layer_idx):
         super().__init__(config)
         self.text_layer = text_layer
-        if layer_idx != 0 and ((self.text_layer and layer_idx < configs["prompt_depth_text"]) or (not self.text_layer and layer_idx < configs["prompt_depth_vision"])):
+        
+        # Apply prompts to the deepest layers (last few) instead of the shallow ones
+        total_layers = config.num_hidden_layers
+        inject_text = self.text_layer and layer_idx >= (total_layers - configs["prompt_depth_text"])
+        inject_vision = not self.text_layer and layer_idx >= (total_layers - configs["prompt_depth_vision"])
+        
+        if layer_idx != 0 and (inject_text or inject_vision):
             self.add_prompt = True
             if self.text_layer:
                 self.n_ctx_text = configs["num_context_text"] # hyperparameter

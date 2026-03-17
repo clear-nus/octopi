@@ -127,7 +127,12 @@ def main(configs, exp_name):
     model.eval()
     # llm.eval()
     if configs["use_clip"]:
-        image_processor = CLIPImageProcessor.from_pretrained(configs["use_clip"])
+        try:
+            image_processor = CLIPImageProcessor.from_pretrained(configs["use_clip"])
+        except Exception as e:
+            print(f"Warning: Could not load CLIP processor: {e}.")
+            image_processor = None
+            raise
     if configs["encoder_path"] is not None:
         try:
             model.encoder.load_state_dict(torch.load(configs["encoder_path"]))

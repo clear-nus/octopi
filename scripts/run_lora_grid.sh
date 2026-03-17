@@ -1,5 +1,8 @@
 #!/bin/bash
 
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+
 # Configuration
 CONFIG_FILE="configs/train_llm_config.yaml"
 ENCODER_PATH="exps/2026_02_02_10_44_30_train_clip_clip_seed_0/encoder.pt"
@@ -22,8 +25,8 @@ SEED=0
 echo "Cleaning up data directory..."
 rm -rf "$DATA_DIR"
 echo "Generating data for seed $SEED in $DATA_DIR..."
-python utils/process_dataset.py --dataset_path "$DATASET_PATH" --output_path "$DATA_DIR" --seed "$SEED"
-python utils/generate_qa.py --data_path "$DATA_DIR" --seed "$SEED"
+python src/utils/process_dataset.py --dataset_path "$DATASET_PATH" --output_path "$DATA_DIR" --seed "$SEED"
+python src/utils/generate_qa.py --data_path "$DATA_DIR" --seed "$SEED"
 
 for LLM_GRADIENT_ACCUM_STEPS_VAL in "${LLM_GRADIENT_ACCUM_STEPS[@]}"; do
     for LORA_DROPOUT_VAL in "${LORA_DROPOUT[@]}"; do
@@ -34,7 +37,7 @@ for LLM_GRADIENT_ACCUM_STEPS_VAL in "${LLM_GRADIENT_ACCUM_STEPS[@]}"; do
 
         # Update Config for this run
         # We ensure we point to the Stage 1 weights and set LoRA params
-        python utils/update_config.py --config_path "$CONFIG_FILE" \
+        python src/utils/update_config.py --config_path "$CONFIG_FILE" \
             --key use_lora --value True \
             --key encoder_path --value "$ENCODER_PATH" \
             --key lora_trained --value False \
@@ -58,7 +61,7 @@ for LLM_GRADIENT_ACCUM_STEPS_VAL in "${LLM_GRADIENT_ACCUM_STEPS[@]}"; do
         export EXP_ID="lora_grid"
         
         echo "Running train_llm.py..."
-        python train_llm.py
+        python src/train_llm.py
 
         # Find output dir
         LATEST_EXP_DIR=$(ls -td exps/*_$EXP_ID | head -1)
