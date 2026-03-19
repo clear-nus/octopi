@@ -97,6 +97,8 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
     evaluator = LLMEvaluator()
     with torch.no_grad():
         for test_sample_step, batch in enumerate(tqdm.tqdm(test_loader)):
+            if configs.get("val_subset_size") is not None and test_sample_step >= configs["val_subset_size"]:
+                break
             # NOTE: hardcoded for batch size of 1
             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
             answer_tokens = answer_tokens.to(device)
@@ -467,20 +469,22 @@ def train(configs, exp_name, g):
                         model.project.eval()
                     print(f"Validation Loss: {val_loss}")
                     
-                    # Automate saving at every val step for post-training full evaluation
-                    current_step = train_sample_step + 1
-                    print(f"Saving checkpoint at step {current_step}...")
-                    model.llm.generation_config.temperature = None
-                    model.llm.generation_config.top_p = None
-                    if len(llm_params) > 0:
-                        if configs["use_lora"]:
-                            model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/step_{current_step}_llm_weights")
-                        else:
-                            torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/step_{current_step}_llm_weights.pt")
-                    torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/step_{current_step}_project.pt")
-                    if not configs["freeze_encoder"]:
-                        torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/step_{current_step}_encoder.pt")
-                    tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
+                    if val_loss < best_val_loss:
+                        print(f"New best validation loss: {val_loss:.4f} (previous: {best_val_loss:.4f})")
+                        best_val_loss = val_loss
+                        current_step = train_sample_step + 1
+                        print(f"Saving BEST checkpoint at step {current_step}...")
+                        model.llm.generation_config.temperature = None
+                        model.llm.generation_config.top_p = None
+                        if len(llm_params) > 0:
+                            if configs["use_lora"]:
+                                model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/best_llm_weights")
+                            else:
+                                torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt")
+                        torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/best_project.pt")
+                        if not configs["freeze_encoder"]:
+                            torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
+                        tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
         # if not configs["val"]:
@@ -503,91 +507,40 @@ def train(configs, exp_name, g):
     if configs["test"]:
         if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
             print(f"\n=========================================")
-            print(f"Post-Training Automated Checkpoint Sweep")
+            print(f"Loading best checkpoint for testing...")
             print(f"=========================================")
             
-            import glob
-            import shutil
-            import gc
-            
-            checkpoints = glob.glob(f"{configs['exps_path']}/{exp_name}/step_*_project.pt")
-            steps = sorted([int(p.split('step_')[1].split('_project.pt')[0]) for p in checkpoints])
-            print(f"Found {len(steps)} checkpoints to evaluate: {steps}")
-            
-            best_avg_acc = -1
-            best_step = -1
-            
-            for step in steps:
-                print(f"\n--- Testing Checkpoint Step {step} ---")
-                
-                # Reload Projection
-                step_proj_path = f"{configs['exps_path']}/{exp_name}/step_{step}_project.pt"
-                model.project.load_state_dict(torch.load(step_proj_path, map_location=device, weights_only=True))
+            # Reload Projection
+            best_proj_path = f"{configs['exps_path']}/{exp_name}/best_project.pt"
+            if os.path.exists(best_proj_path):
+                model.project.load_state_dict(torch.load(best_proj_path, map_location=device, weights_only=True))
 
-                # Reload Encoder
-                if not configs["freeze_encoder"]:
-                    step_enc_path = f"{configs['exps_path']}/{exp_name}/step_{step}_encoder.pt"
-                    model.encoder.load_state_dict(torch.load(step_enc_path, map_location=device))
+            # Reload Encoder
+            if not configs["freeze_encoder"]:
+                best_enc_path = f"{configs['exps_path']}/{exp_name}/best_encoder.pt"
+                if os.path.exists(best_enc_path):
+                    model.encoder.load_state_dict(torch.load(best_enc_path, map_location=device))
 
-                # Reload LLM
-                if configs["use_lora"]:
-                    step_llm_path = f"{configs['exps_path']}/{exp_name}/step_{step}_llm_weights"
+            # Reload LLM
+            if configs["use_lora"]:
+                best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
+                if os.path.exists(best_llm_path):
                     try:
                         from peft import PeftModel
-                        # If the model is already wrapped in PEFT, just load the weights
                         if hasattr(model.llm, "load_adapter"):
-                            model.llm.load_adapter(step_llm_path, adapter_name="default")
+                            model.llm.load_adapter(best_llm_path, adapter_name="default")
                             model.llm.set_adapter("default")
                         else:
-                            model.llm = PeftModel.from_pretrained(model.llm, step_llm_path)
+                            model.llm = PeftModel.from_pretrained(model.llm, best_llm_path)
                     except Exception as e:
                         print(f"Fallback Load: {e}")
-                        model.llm.load_state_dict(torch.load(step_llm_path+'/adapter_model.bin', map_location=device), strict=False)
-                else:
-                    if len(llm_params) > 0:
-                        step_llm_path = f"{configs['exps_path']}/{exp_name}/step_{step}_llm_weights.pt"
-                        model.llm.load_state_dict(torch.load(step_llm_path, map_location=device), strict=False)
+                        model.llm.load_state_dict(torch.load(best_llm_path+'/adapter_model.bin', map_location=device), strict=False)
+            else:
+                if len(llm_params) > 0:
+                    best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt"
+                    if os.path.exists(best_llm_path):
+                        model.llm.load_state_dict(torch.load(best_llm_path, map_location=device), strict=False)
                 
-                # We do NOT merge the adapter here so we can swap it out easily for the next step loop
-                
-                # NOTE: We evaluate on the validation set to pick the best checkpoint to avoid test-set test data leakage
-                results = run_evaluation(model, val_loader, device, tokenizer, configs, exp_name, f"val_step_{step}")
-                
-                # Extract combined accuracy
-                tasks_to_average = []
-                for k, v in results.items():
-                    if "accuracy" in v:
-                        tasks_to_average.append(v["accuracy"])
-                    elif "combined_accuracy" in v:
-                        tasks_to_average.append(v["combined_accuracy"])
-                
-                if len(tasks_to_average) > 0:
-                    avg_acc = sum(tasks_to_average) / len(tasks_to_average)
-                    print(f"--- Step {step} Average Accuracy: {avg_acc:.4f} ---")
-                    if avg_acc > best_avg_acc:
-                        best_avg_acc = avg_acc
-                        best_step = step
-                        
-            print(f"\n=========================================")
-            print(f"🏆 BEST CHECKPOINT: Step {best_step} with Avg Accuracy {best_avg_acc:.4f}")
-            print(f"=========================================")
-            
-            # Save the winning checkpoint as the 'best_model'
-            import shutil
-            if best_step != -1:
-                shutil.copy(f"{configs['exps_path']}/{exp_name}/step_{best_step}_project.pt", f"{configs['exps_path']}/{exp_name}/best_project.pt")
-                if configs["use_lora"]:
-                    os.makedirs(f"{configs['exps_path']}/{exp_name}/best_llm_weights", exist_ok=True)
-                    shutil.copytree(f"{configs['exps_path']}/{exp_name}/step_{best_step}_llm_weights", f"{configs['exps_path']}/{exp_name}/best_llm_weights", dirs_exist_ok=True)
-                else:
-                    if len(llm_params) > 0:
-                        shutil.copy(f"{configs['exps_path']}/{exp_name}/step_{best_step}_llm_weights.pt", f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt")
-                if not configs["freeze_encoder"]:
-                    shutil.copy(f"{configs['exps_path']}/{exp_name}/step_{best_step}_encoder.pt", f"{configs['exps_path']}/{exp_name}/best_encoder.pt")
-            
-            print(f"\n--- Running Final Evaluation against Test Set using Step {best_step} ---")
-            # We already have the best model loaded in memory from the end of the loop, or we can reload it:
-            # Let's cleanly run it
             model.eval()
             run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
         

@@ -7,15 +7,13 @@ export HTTPS_PROXY=http://127.0.0.1:1087
 SEEDS=(0)
 
 # Grid Search Parameters
-# Try combinations of r and llm_lr. 
-# lora_alpha should generally be 2x r
-RANKS=(128 256)
-LRS=(0.00005 0.00002 0.0002)
+RANKS=(128)
+LRS=(0.0002 0.00005 0.00002)
 
 # Path to config file
 CONFIG_FILE="configs/train_llm_config.yaml"
 DATASET_PATH="dataset"
-DATA_DIR="data"
+DATA_DIR="data" 
 
 
 for SEED in "${SEEDS[@]}"; do
@@ -62,7 +60,7 @@ for SEED in "${SEEDS[@]}"; do
         --key projection_lr --value 0.0002 \
         --key llm_lr --value 0.0002 \
         --key warmup_steps --value 10 \
-        --key llm_gradient_accumulation_steps --value 32
+        --key llm_gradient_accumulation_steps --value 16
 
     # Pass seed as experiment identifier
     export EXP_ID="full_pipeline_${SEED}"
@@ -92,7 +90,7 @@ for SEED in "${SEEDS[@]}"; do
                 --key use_lora --value True \
                 --key lora_trained --value False \
                 --key max_train_steps --value 3000 \
-                --key val_freq --value 500 \
+                --key val_freq --value 300 \
                 --key projection_path --value "$LATEST_EXP_DIR/best_project.pt" \
                 --key tokenizer_path --value "$LATEST_EXP_DIR/tokenizer" \
                 --key llm_path --value "$LATEST_EXP_DIR/best_llm_weights.pt" \
@@ -105,8 +103,8 @@ for SEED in "${SEEDS[@]}"; do
                 --key r --value "$R" \
                 --key lora_alpha --value "$ALPHA" \
                 --key lora_dropout --value 0.05 \
-                --key target_modules --value "[q_proj, v_proj]" \
-                --key llm_gradient_accumulation_steps --value 32
+                --key target_modules --value "[q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]" \
+                --key llm_gradient_accumulation_steps --value 16
             
             export EXP_ID="full_pipeline_${SEED}_lora_r${R}_lr${LR}"
             echo "Running train_llm.py (Stage 2 - LoRA)..."
