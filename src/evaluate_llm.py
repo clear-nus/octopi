@@ -170,7 +170,6 @@ def print_stats(json_path, show_opd, show_pc, show_pss, show_pom, show_question)
     print("\n")
 
 
-9
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--test_preds_path', help='predictions file to evaluate')

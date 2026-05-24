@@ -1,17 +1,18 @@
 TRAIN_OBJECTS = [
+    # Original: also included egg, blanket, pillow, basket, sponge_rough, rubber_slippers (moved to VAL_OBJECTS to increase val set size)
     'physiclear_scissor_handle', 'physiclear_rug', 'physiclear_strainer_base',
-    'physiclear_toothbrush_handle', 'physiclear_scissor_blade', 'physiclear_tv_remote_back', 'physiclear_pillow', 'physiclear_water_bottle', 'physiclear_controller_stick', 'physiclear_avocado_kinda_ripe',
+    'physiclear_toothbrush_handle', 'physiclear_scissor_blade', 'physiclear_tv_remote_back', 'physiclear_water_bottle', 'physiclear_controller_stick', 'physiclear_avocado_kinda_ripe',
     'physiclear_rubber_bands', 'physiclear_tomato', 'physiclear_tissue_ball', 'physiclear_mop_head',
     'physiclear_rice_spatula_handle', 'physiclear_sponge_soft',
     'physiclear_controller_buttons', 'physiclear_avocado_unripe', 'physiclear_mandarin_orange', 'physiclear_oven_mitt', 'physiclear_hairbrush_bristles_side',
     'physiclear_leather_book', 'physiclear_bread_knife_handle', 'physiclear_lanyard_card',
     'physiclear_tennis_ball', 'physiclear_baseball', 'physiclear_gauze_pad', 'physiclear_stress_ball', 'physiclear_feather_duster',
     'physiclear_toilet_brush_handle',
-    'physiclear_potato', 'physiclear_paper_towel', 'physiclear_controller_shoulderpads', 'physiclear_sponge_rough', 'physiclear_lanyard_string', 'physiclear_insulating_holder',
-    'physiclear_basket', 'physiclear_blanket', 'physiclear_rubber_slippers', 'physiclear_wires', 'physiclear_rice_spatula_base',
+    'physiclear_potato', 'physiclear_paper_towel', 'physiclear_controller_shoulderpads', 'physiclear_lanyard_string', 'physiclear_insulating_holder',
+    'physiclear_wires', 'physiclear_rice_spatula_base',
     'physiclear_toothbrush_bristles', 'physiclear_tv_remote_buttons',
     'physiclear_rice', 'physiclear_aluminium_foil', 'physiclear_pen_base', 'physiclear_strainer_handle',
-    'physiclear_wood_ruler', 'physiclear_egg', 'physiclear_controller_keypad', 'physiclear_cotton_ball', 'physiclear_toilet_paper',
+    'physiclear_wood_ruler', 'physiclear_controller_keypad', 'physiclear_cotton_ball', 'physiclear_toilet_paper',
     'physiclear_masking_tape', 'physiclear_kiwi_kinda_ripe', 'physiclear_bread_knife_blade', 'physiclear_controller_base', 'physiclear_orange','physiclear_pen_pad', 'physiclear_eraser', 'physiclear_lemon'
 ]
 
@@ -24,7 +25,10 @@ TRAIN_OBJECTS = [
 # ]
 
 VAL_OBJECTS = [
-    'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap'
+    # Original (7 objects): 'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap'
+    # Added from train to reduce checkpoint selection noise (13 objects total):
+    'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap',
+    'physiclear_egg', 'physiclear_blanket', 'physiclear_pillow', 'physiclear_basket', 'physiclear_sponge_rough', 'physiclear_rubber_slippers',
 ]
 
 TEST_OBJECTS = [

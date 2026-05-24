@@ -24,6 +24,29 @@ def get_sample_description(sample, properties, use_unstructured):
     return description
 
 
+def _sample_by_rank(samples, rank_dict):
+    """Pick a uniformly random rank class, then a random object with that rank."""
+    keys = [k for k in samples.keys() if k in rank_dict]
+    by_rank = {}
+    for obj in keys:
+        by_rank.setdefault(rank_dict[obj], []).append(obj)
+    rank = random.choice(list(by_rank.keys()))
+    return random.choice(by_rank[rank])
+
+
+def _sample_pair_balanced_ranks(samples, rank_dict):
+    """Sample two objects with independently uniform rank distribution.
+    Each rank is chosen uniformly from {0,1,2}, giving P(tie)=1/3 and
+    equal coverage of all three PC answer types (yes / no / both similar)."""
+    keys = [k for k in samples.keys() if k in rank_dict]
+    by_rank = {}
+    for obj in keys:
+        by_rank.setdefault(rank_dict[obj], []).append(obj)
+    rank_a = random.choice(list(by_rank.keys()))
+    rank_b = random.choice(list(by_rank.keys()))
+    return [random.choice(by_rank[rank_a]), random.choice(by_rank[rank_b])]
+
+
 def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples, use_unstructured, use_properties):
     properties = ["hardness", "roughness", "texture"]
 
@@ -139,7 +162,7 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
                 question = property_questions[question_type][qs][question_key].copy()
                 num_tactile = question.count("<img_tokens>")
                 # get relevant object(s) and their frames
-                sample = random.sample(list(samples.keys()), k=num_tactile)[0]
+                sample = _sample_by_rank(samples, RANKS[random.choice(properties)])
                 tactile = [random.choice(samples[sample])]
                 answer = get_sample_description(sample, properties, use_unstructured)
                 if qs == 0:
@@ -162,8 +185,8 @@ def generate_one_step_qa(start_prompt, json_path, data_path, split, num_samples,
         elif question_type == f"{prefix}_property_comparison":
             num_tactile = 2
             # get relevant object(s) and their frames
-            all_samples = random.sample(list(samples.keys()), k=num_tactile)
             prop = random.choice(properties)
+            all_samples = _sample_pair_balanced_ranks(samples, RANKS[prop])
             for qs in range(question_steps):
                 question_key = random.choice(list(property_questions[question_type][qs].keys()))
                 question = property_questions[question_type][qs][question_key].copy()

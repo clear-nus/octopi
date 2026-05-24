@@ -5,12 +5,11 @@ seed: 0
 exps_path: exps
 
 # encoder
-use_vqvae: False
 use_clip: openai/clip-vit-large-patch14
 encoder_output_size: 1024
 encoder_path: null
 num_context_vision: 8
-prompt_depth_vision: 12
+prompt_depth_vision: 24
 dim_context_vision: 1024
 num_context_text: 6
 prompt_depth_text: 12

@@ -1,7 +1,6 @@
 #!/bin/bash
 
-export HTTP_PROXY=http://127.0.0.1:1087
-export HTTPS_PROXY=http://127.0.0.1:1087
+set -euo pipefail
 
 # Array of seeds to test
 SEEDS=(0)
@@ -34,12 +33,16 @@ for SEED in "${SEEDS[@]}"; do
     python src/utils/update_config.py --config_path "$CLIP_CONFIG_FILE" \
         --key data_dir --value "$DATA_DIR" \
         --key seed --value "$SEED"
-    
+
     export EXP_ID="clip_seed_${SEED}"
-    # python src/train_clip.py
+    python src/train_clip.py
     
     # Find encoder output
-    LATEST_CLIP_DIR=$(ls -td exps/*_$EXP_ID | head -1)
+    LATEST_CLIP_DIR=$(find exps -maxdepth 1 -type d -name "*_${EXP_ID}" | sort | tail -1)
+    if [ -z "$LATEST_CLIP_DIR" ] || [ ! -f "$LATEST_CLIP_DIR/encoder.pt" ]; then
+        echo "Could not find encoder checkpoint for EXP_ID=$EXP_ID"
+        exit 1
+    fi
     ENCODER_PATH="$LATEST_CLIP_DIR/encoder.pt"
     echo "Encoder training completed. Encoder at: $ENCODER_PATH"
 
@@ -49,17 +52,17 @@ for SEED in "${SEEDS[@]}"; do
         --key seed --value "$SEED" \
         --key encoder_path --value "$ENCODER_PATH" \
         --key use_lora --value False \
-        --key max_train_steps --value 8000 \
-        --key val_freq --value 800 \
+        --key max_train_steps --value 3200 \
+        --key val_freq --value 400 \
         --key projection_path --value null \
         --key tokenizer_path --value null \
         --key llm_path --value null \
         --key exps_path --value exps \
         --key freeze_projection --value False \
         --key modules_to_save --value "[embed_tokens]" \
-        --key projection_lr --value 0.0002 \
-        --key llm_lr --value 0.0002 \
-        --key warmup_steps --value 10 \
+        --key projection_lr --value 0.00005 \
+        --key llm_lr --value 0.00005 \
+        --key warmup_steps --value 20 \
         --key llm_gradient_accumulation_steps --value 16
 
     # Pass seed as experiment identifier
@@ -69,7 +72,15 @@ for SEED in "${SEEDS[@]}"; do
     python src/train_llm.py
     
     # Find output dir of Stage 1
-    LATEST_EXP_DIR=$(ls -td exps/*_full_pipeline_$SEED | head -1)
+    LATEST_EXP_DIR=$(find exps -maxdepth 1 -type d -name "*_full_pipeline_${SEED}" | sort | tail -1)
+    if [ -z "$LATEST_EXP_DIR" ]; then
+        echo "Could not find Stage 1 output directory for seed $SEED"
+        exit 1
+    fi
+    if [ ! -f "$LATEST_EXP_DIR/best_project.pt" ] || [ ! -f "$LATEST_EXP_DIR/best_llm_weights.pt" ] || [ ! -d "$LATEST_EXP_DIR/tokenizer" ]; then
+        echo "Stage 1 output is missing required LoRA handoff artifacts in $LATEST_EXP_DIR"
+        exit 1
+    fi
     echo "Stage 1 completed. Output: $LATEST_EXP_DIR"
 
     # 4. Run LoRA Finetuning (Stage 2 Grid Search)
@@ -77,7 +88,7 @@ for SEED in "${SEEDS[@]}"; do
     
     for R in "${RANKS[@]}"; do
         for LR in "${LRS[@]}"; do
-            ALPHA=$(( R * 2 ))
+            ALPHA=$R
             echo ""
             echo "================================================================"
             echo "Running LoRA finetuning grid point: r=${R}, alpha=${ALPHA}, lr=${LR}"
@@ -90,7 +101,6 @@ for SEED in "${SEEDS[@]}"; do
                 --key use_lora --value True \
                 --key lora_trained --value False \
                 --key max_train_steps --value 3000 \
-                --key val_freq --value 300 \
                 --key projection_path --value "$LATEST_EXP_DIR/best_project.pt" \
                 --key tokenizer_path --value "$LATEST_EXP_DIR/tokenizer" \
                 --key llm_path --value "$LATEST_EXP_DIR/best_llm_weights.pt" \
@@ -99,7 +109,8 @@ for SEED in "${SEEDS[@]}"; do
                 --key modules_to_save --value "[embed_tokens]" \
                 --key projection_lr --value "$LR" \
                 --key llm_lr --value "$LR" \
-                --key warmup_steps --value 10 \
+                --key warmup_steps --value 20 \
+                --key val_freq --value 150 \
                 --key r --value "$R" \
                 --key lora_alpha --value "$ALPHA" \
                 --key lora_dropout --value 0.05 \
@@ -111,7 +122,7 @@ for SEED in "${SEEDS[@]}"; do
             python src/train_llm.py
 
             # Find output dir of Stage 2
-            LATEST_LORA_EXP_DIR=$(ls -td exps/*_lora_r${R}_lr${LR} | head -1)
+            LATEST_LORA_EXP_DIR=$(find exps -maxdepth 1 -type d -name "*_lora_r${R}_lr${LR}" | sort | tail -1)
             echo "Stage 2 completed. Output: $LATEST_LORA_EXP_DIR"
         done
     done

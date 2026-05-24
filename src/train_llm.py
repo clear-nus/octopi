@@ -1,6 +1,6 @@
-import os 
-import torch.nn as nn 
-import torch 
+import os
+import torch.nn as nn
+import torch
 from torch.utils.data import DataLoader
 from torch import optim
 import tqdm
@@ -104,7 +104,8 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
             answer_tokens = answer_tokens.to(device)
             outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
             max_new_tokens = configs["max_new_tokens"][question_type[0]]
-            generation_tokens = model.llm.generate(inputs_embeds=question_embeds, max_new_tokens=max_new_tokens, temperature=None)
+            llm_dtype = model.llm.get_input_embeddings().weight.dtype
+            generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
             generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip() # https://huggingface.co/docs/transformers/main/llm_tutorial
             answer_tokens = answer_tokens[0].cpu().numpy()
             answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
@@ -142,6 +143,112 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
     print(f"Evaluation ({file_suffix}) done!")
     return results
 
+def _extract_key(generation, question_type):
+    """Extract the scoreable portion of a generation for majority voting."""
+    gen = generation.split("</s>")[0].strip()
+    if question_type == "eval_object_property_description":
+        parts = gen.split("presents")
+        return parts[-1].strip() if len(parts) > 1 else gen
+    parts = gen.split("Conclusion: ")
+    return parts[-1].strip() if len(parts) > 1 else gen
+
+
+def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, configs, exp_name, file_suffix):
+    n_passes = configs.get("tta_passes", 1)
+    print(f"\nRunning TTA evaluation ({n_passes} passes) on {file_suffix}...")
+    did_merge = False
+    if configs.get("use_lora", False) and hasattr(model.llm, "merge_adapter"):
+        try:
+            model.llm.merge_adapter()
+            did_merge = True
+        except Exception as e:
+            print(f"Warning: Could not merge adapters: {e}")
+    model.eval()
+
+    all_generations = []  # n_passes x n_samples
+    all_meta = None
+
+    for pass_idx in range(n_passes):
+        dataset = TactileLLMDataset(
+            image_processor, test_files, split_name="test",
+            tokenizer=tokenizer, flip_p=0, random_frames=(pass_idx > 0),
+            max_frames=configs.get("max_frames", 5)
+        )
+        loader = DataLoader(dataset, batch_size=1, shuffle=False)
+        pass_gens = []
+        pass_meta = []
+        with torch.no_grad():
+            for batch in tqdm.tqdm(loader, desc=f"TTA pass {pass_idx + 1}/{n_passes}"):
+                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+                answer_tokens = answer_tokens.to(device)
+                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+                max_new_tokens = configs["max_new_tokens"][question_type[0]]
+                llm_dtype = model.llm.get_input_embeddings().weight.dtype
+                generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
+                generation = tokenizer.decode(generation_tokens[0], skip_special_tokens=True).strip()
+                generation = generation.split("</s>")[0].strip()
+                if "</s>" not in generation:
+                    generation += "</s>"
+                pass_gens.append(generation)
+                if pass_idx == 0:
+                    answer = tokenizer.decode(answer_tokens[0].cpu().numpy(), skip_special_tokens=True).strip()
+                    pass_meta.append({
+                        "question": "".join([i[0] for i in question]),
+                        "question_type": question_type[0],
+                        "question_step": question_step.item(),
+                        "sample_paths": [i[0] for i in tactile],
+                        "answer": answer,
+                    })
+        all_generations.append(pass_gens)
+        if pass_idx == 0:
+            all_meta = pass_meta
+
+    if did_merge:
+        try:
+            model.llm.unmerge_adapter()
+        except Exception as e:
+            print(f"Warning: Could not unmerge adapters: {e}")
+
+    from collections import Counter
+    evaluator = LLMEvaluator()
+    preds = []
+    for i, meta in enumerate(all_meta):
+        qt = meta["question_type"]
+        keys = [_extract_key(all_generations[p][i], qt) for p in range(n_passes)]
+        majority_key = Counter(keys).most_common(1)[0][0]
+        base_gen = all_generations[0][i].split("</s>")[0].strip()
+        if qt == "eval_object_property_description" and "presents" in base_gen:
+            idx = base_gen.rfind("presents")
+            merged_gen = base_gen[:idx + len("presents")] + " " + majority_key
+        elif "Conclusion: " in base_gen:
+            merged_gen = base_gen.split("Conclusion: ")[0] + "Conclusion: " + majority_key
+        else:
+            merged_gen = majority_key
+        merged_gen += "</s>"
+        pred = dict(meta)
+        pred["generation"] = merged_gen
+        pred["tta_keys"] = keys
+        preds.append(pred)
+        evaluator.evaluate(
+            question=meta["question"], generation=merged_gen, answer=meta["answer"],
+            question_type=qt, question_step=meta["question_step"],
+            show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False
+        )
+
+    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_tta_preds.json', 'w') as f:
+        json.dump(preds, f, indent=4)
+    results = evaluator.get_results()
+    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_tta_results.txt', 'w') as f:
+        for task, stats in results.items():
+            f.write(f"{task}:\n")
+            for stat, value in stats.items():
+                if task in random_scores and stat in random_scores[task]:
+                    f.write(f"\t{stat}: {value} ({random_scores[task][stat]})\n")
+                else:
+                    f.write(f"\t{stat}: {value}\n")
+    print(f"TTA evaluation ({file_suffix}) done!")
+
+
 def train(configs, exp_name, g):
     # device
     device = f'cuda:{configs["cuda"]}' # for inputs and model if not device_map
@@ -166,7 +273,7 @@ def train(configs, exp_name, g):
         )
     if configs["gpu_config"] is not None:
         if configs["tokenizer_path"] is not None:
-            tokenizer_path = configs["tokenizer_path"]
+            tokenizer_path = os.path.abspath(configs["tokenizer_path"])
         if not configs["lora_trained"]:
             if configs["llm_path"] is not None:
                 if configs["llm_path"].endswith(".pt"):
@@ -190,19 +297,30 @@ def train(configs, exp_name, g):
             if configs["quantized"]:
                 llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"], quantization_config=bnb_config)
             else:
-                llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"])
+                llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"], torch_dtype=torch.bfloat16)
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_auth_token=True, padding_side="left")
+            # Match base embedding size to tokenizer vocab BEFORE loading LoRA adapter,
+            # since the saved adapter's embed_tokens may have extra rows (e.g. <tact_start>/<tact_end>).
+            if len(tokenizer) > llm.get_input_embeddings().weight.shape[0]:
+                llm.resize_token_embeddings(len(tokenizer))
             # reference: https://jaotheboss.medium.com/domain-training-your-llm-6c77f53e3e27
             add_new_tokens(llm, tokenizer, new_tokens)
             if configs["quantized"]:
                 llm = PeftModel.from_pretrained(model=llm, model_id=configs["llm_path"], is_trainable=False, device_map="auto", max_memory=gpu_max_mem_config, quantization_config=bnb_config)
             else:
                 llm = PeftModel.from_pretrained(model=llm, model_id=configs["llm_path"], is_trainable=False, device_map="auto", max_memory=gpu_max_mem_config)
+            # PeftModel loads LoRA params in fp32; cast to base weight dtype (bf16)
+            for module in llm.modules():
+                if hasattr(module, 'lora_A') and hasattr(module, 'lora_B') and hasattr(module, 'weight'):
+                    td = module.weight.device
+                    dt = module.weight.dtype
+                    module.lora_A.to(device=td, dtype=dt)
+                    module.lora_B.to(device=td, dtype=dt)
         else:
             if configs["quantized"]:
                 llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"], quantization_config=bnb_config)
             else:
-                llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"])
+                llm = AutoModelForCausalLM.from_pretrained(model_path, device_map=device_map, offload_folder=configs["offload_dir"], torch_dtype=torch.bfloat16)
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, padding_side="left")
             
             if len(tokenizer) > llm.get_input_embeddings().weight.shape[0]:
@@ -228,6 +346,7 @@ def train(configs, exp_name, g):
         # reference: https://jaotheboss.medium.com/domain-training-your-llm-6c77f53e3e27
         new_tokens = ['<tact_start>', '<tact_end>']
         add_new_tokens(llm, tokenizer, new_tokens)
+    tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
 
     # load datasets
     if configs["use_clip"]:
@@ -241,21 +360,22 @@ def train(configs, exp_name, g):
         except Exception as e:
             print(f"Error loading CLIP processor: {e}")
             raise
+    max_frames = configs.get("max_frames", 5)
     if configs["train"]:
-        train_dataset = TactileLLMDataset(image_processor, configs["train_files"], split_name="train", tokenizer=tokenizer, flip_p=configs["flip_p"])
+        train_dataset = TactileLLMDataset(image_processor, configs["train_files"], split_name="train", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
         train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     if configs["val"]:
-        val_dataset = TactileLLMDataset(image_processor, configs["val_files"], split_name="val", tokenizer=tokenizer, flip_p=configs["flip_p"])
+        val_dataset = TactileLLMDataset(image_processor, configs["val_files"], split_name="val", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
         val_loader = DataLoader(val_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     if configs["test"]:
-        test_dataset = TactileLLMDataset(image_processor, configs["test_files"], split_name="test", tokenizer=tokenizer, flip_p=configs["flip_p"])
+        test_dataset = TactileLLMDataset(image_processor, configs["test_files"], split_name="test", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
         test_loader = DataLoader(test_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
 
     # model instantiation
     if configs["lora_trained"]:
-        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm.model, use_vqvae=configs["use_vqvae"], device=device)
+        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm.model, device=device)
     else:
-        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm, use_vqvae=configs["use_vqvae"], device=device)
+        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm, device=device)
     
     # If using device_map (gpu_config present), we should not move the whole model to device
     # because the LLM parts are already placed. We only move the other modules.
@@ -277,7 +397,6 @@ def train(configs, exp_name, g):
             inference_mode=False,
             task_type="CAUSAL_LM",
             modules_to_save=configs["modules_to_save"],
-            use_dora=True
         )
         llm_weights_path = f"{configs['exps_path']}/{exp_name}/llm_weights"
         if not os.path.exists(llm_weights_path):
@@ -288,7 +407,24 @@ def train(configs, exp_name, g):
             
             # Instead just apply the config in-memory directly
             llm = get_peft_model(llm, peft_config)
-            
+            # LoRA params and modules_to_save copies are initialized on CPU with float32.
+            # Move them to match the device AND dtype of their corresponding base weights.
+            for module in llm.modules():
+                # LoRA linear layers
+                if hasattr(module, 'lora_A') and hasattr(module, 'lora_B') and hasattr(module, 'weight'):
+                    target_device = module.weight.device
+                    target_dtype = module.weight.dtype
+                    module.lora_A.to(device=target_device, dtype=target_dtype)
+                    module.lora_B.to(device=target_device, dtype=target_dtype)
+                # modules_to_save copies (e.g. embed_tokens adapter copy)
+                if type(module).__name__ == 'ModulesToSaveWrapper' and hasattr(module, 'original_module'):
+                    try:
+                        ref = next(module.original_module.parameters())
+                        for adapter_copy in module.modules_to_save.values():
+                            adapter_copy.to(device=ref.device, dtype=ref.dtype)
+                    except StopIteration:
+                        pass
+
         if configs["quantized"]:
             # If we are not loading from disk, ‘llm’ is already the PeftModel from above
             pass
@@ -304,7 +440,7 @@ def train(configs, exp_name, g):
     if configs["projection_path"] is not None:
         projection_dict = torch.load(configs["projection_path"], map_location='cpu', weights_only=True)
         model.project.load_state_dict(projection_dict)
-    
+
     project_params = []
     if configs["freeze_projection"]:
         for name, param in model.project.named_parameters():
@@ -313,6 +449,23 @@ def train(configs, exp_name, g):
         for name, param in model.project.named_parameters():
             param.requires_grad = True
         project_params = list(model.project.parameters())
+
+    # 3) encoder setup — must happen before optimizer build so encoder params can join the grouped optimizer
+    if configs["encoder_path"] is not None:
+        try:
+            model.encoder.load_state_dict(torch.load(configs["encoder_path"], map_location='cpu', weights_only=True))
+        except RuntimeError:
+            clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
+            model.encoder.model.vision_model = clip.vision_model
+            model.encoder.load_state_dict(torch.load(configs["encoder_path"], map_location='cpu', weights_only=True), strict=True)
+    encoder_params = []
+    if configs["freeze_encoder"]:
+        for name, param in model.encoder.named_parameters():
+            param.requires_grad = False
+    else:
+        for name, param in model.encoder.named_parameters():
+            param.requires_grad = True
+        encoder_params = list(model.encoder.parameters())
 
     if configs["train"]:
         ## LLM optimizer
@@ -355,7 +508,8 @@ def train(configs, exp_name, g):
                     llm_params.append(param)
         print(f"len(llm_params): {len(llm_params)}")
         print(f"len(project_params): {len(project_params)}")
-        
+        print(f"len(encoder_params): {len(encoder_params)}")
+
         optimizer_grouped_parameters = []
         if len(llm_params) > 0:
             optimizer_grouped_parameters.append({
@@ -366,6 +520,11 @@ def train(configs, exp_name, g):
             optimizer_grouped_parameters.append({
                 "params": project_params,
                 "lr": configs["projection_lr"]
+            })
+        if len(encoder_params) > 0:
+            optimizer_grouped_parameters.append({
+                "params": encoder_params,
+                "lr": configs["encoder_lr"]
             })
 
         if len(optimizer_grouped_parameters) > 0:
@@ -379,30 +538,10 @@ def train(configs, exp_name, g):
             else:
                 num_warmup_steps = int(configs["warmup_steps"])
             scheduler_llm = get_cosine_schedule_with_warmup(
-                optimizer_llm, 
-                num_warmup_steps=num_warmup_steps, 
+                optimizer_llm,
+                num_warmup_steps=num_warmup_steps,
                 num_training_steps=num_training_steps
             )
-
-    # 3) encoder setup
-    if configs["use_vqvae"]:
-        model.encoder.load_state_dict(torch.load("encoders/vqvae/encoder.pth", map_location='cpu', weights_only=True))
-        model.vector_quantization.load_state_dict(torch.load("encoders/vqvae/vector_quantization.pth", map_location='cpu', weights_only=True))
-    elif configs["encoder_path"] is not None:
-        try:
-            model.encoder.load_state_dict(torch.load(configs["encoder_path"], map_location='cpu', weights_only=True))
-        except RuntimeError:
-            clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
-            model.encoder.model.vision_model = clip.vision_model
-            model.encoder.load_state_dict(torch.load(configs["encoder_path"], map_location='cpu', weights_only=True), strict=True)
-    if configs["freeze_encoder"]:
-        for name, param in model.encoder.named_parameters():
-            param.requires_grad = False
-    else:
-        for name, param in model.encoder.named_parameters():
-            param.requires_grad = True
-        encoder_params = model.encoder.parameters()
-        optimizer_encoder = torch.optim.SGD(encoder_params, lr=configs["encoder_lr"])
 
     # training
     if configs["train"]:
@@ -444,13 +583,8 @@ def train(configs, exp_name, g):
             loss = outputs.loss / configs["llm_gradient_accumulation_steps"]
             loss.backward()
             if (train_sample_step + 1) % configs["llm_gradient_accumulation_steps"] == 0:
-                # optimizer updates
-                if not configs["freeze_encoder"]:
-                    torch.nn.utils.clip_grad_norm_(encoder_params, max_norm=1.0)
-                    optimizer_encoder.step()
-                    optimizer_encoder.zero_grad()
                 if len(optimizer_grouped_parameters) > 0:
-                    torch.nn.utils.clip_grad_norm_(llm_params + project_params, max_norm=1.0)
+                    torch.nn.utils.clip_grad_norm_(llm_params + project_params + encoder_params, max_norm=1.0)
                     optimizer_llm.step()
                     scheduler_llm.step()
                     optimizer_llm.zero_grad()
@@ -526,7 +660,6 @@ def train(configs, exp_name, g):
                 best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
                 if os.path.exists(best_llm_path):
                     try:
-                        from peft import PeftModel
                         if hasattr(model.llm, "load_adapter"):
                             model.llm.load_adapter(best_llm_path, adapter_name="default")
                             model.llm.set_adapter("default")
@@ -535,6 +668,13 @@ def train(configs, exp_name, g):
                     except Exception as e:
                         print(f"Fallback Load: {e}")
                         model.llm.load_state_dict(torch.load(best_llm_path+'/adapter_model.bin', map_location=device), strict=False)
+                    # Cast reloaded LoRA params to match base weight dtype (e.g., bf16)
+                    for module in model.llm.modules():
+                        if hasattr(module, 'lora_A') and hasattr(module, 'lora_B') and hasattr(module, 'weight'):
+                            td = module.weight.device
+                            dt = module.weight.dtype
+                            module.lora_A.to(device=td, dtype=dt)
+                            module.lora_B.to(device=td, dtype=dt)
             else:
                 if len(llm_params) > 0:
                     best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights.pt"
@@ -543,10 +683,14 @@ def train(configs, exp_name, g):
                 
             model.eval()
             run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
-        
+            if configs.get("use_lora", False) and configs.get("tta_passes", 1) > 1:
+                run_evaluation_tta(model, configs["test_files"], image_processor, device, tokenizer, configs, exp_name, "test_best")
+
         else:
             run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
-        
+            if configs.get("use_lora", False) and configs.get("tta_passes", 1) > 1:
+                run_evaluation_tta(model, configs["test_files"], image_processor, device, tokenizer, configs, exp_name, "test_best")
+
         print(f"LLM test done!")
 
 
@@ -590,7 +734,9 @@ if __name__ == "__main__":
         file.close()
 
     # log outputs
-    sys.stdout = open(f"{configs['exps_path']}/{exp_name}/log.txt", 'w', buffering=1)
+    log_file = open(f"{configs['exps_path']}/{exp_name}/log.txt", 'w', buffering=1)
+    sys.stdout = log_file
+    sys.stderr = log_file
     logging.set_verbosity_error()
 
     # seed

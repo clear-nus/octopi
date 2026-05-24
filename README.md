@@ -40,8 +40,8 @@ pip install -r requirements.txt
 
 * Run the following commands:
 ```bash
-$ python utils/process_dataset.py --dataset_path path/to/dataset --output_path path/to/processed/data # Process tactile video dataset into frames and get sample files
-$ python utils/generate_qa.py --data_path path/to/processed/data  # Generate question-answer pairs for tactile feature alignment and end-to-end fine-tuning
+$ python src/utils/process_dataset.py --dataset_path path/to/dataset --output_path path/to/processed/data # Process tactile video dataset into frames and get sample files
+$ python src/utils/generate_qa.py --data_path path/to/processed/data  # Generate question-answer pairs for tactile feature alignment and end-to-end fine-tuning
 ```
 
 

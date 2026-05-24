@@ -1,6 +1,8 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
 from transformers import CLIPVisionModel
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from utils.constants import *
 
 
@@ -73,10 +75,7 @@ class ViFiCLIP(nn.Module):
         pooled_output = vision_outputs.hidden_states[-2][:, 0].to(tactile_frames.dtype) # Use layer -2 CLS token
         _, patch_embed_size = pooled_output.shape
         pooled_output = pooled_output.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
-        # add sinusoidal positional embedding
         vision_features = pooled_output
-        sinusoidal_embeds = sinusoidal_positional_embedding(token_sequence_size=5, indices=all_indices, token_embedding_dim=1024, batch_size=vision_features.shape[0]).to(vision_features.device)
-        # vision_features = vision_features + sinusoidal_embeds
         video_features = vision_features.mean(dim=1, keepdim=False)
         video_features = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
         if texts is not None:
@@ -98,11 +97,10 @@ class ViFiCLIP(nn.Module):
 
 
 class MultimodalLLMForCausalLM(nn.Module):
-    def __init__(self, tokenizer, clip_model, encoder_output_size, cutoff_len, llm, use_vqvae, device):
+    def __init__(self, tokenizer, clip_model, encoder_output_size, cutoff_len, llm, device):
         super(MultimodalLLMForCausalLM, self).__init__()
         self.tokenizer = tokenizer
         self.cutoff_len = cutoff_len
-        self.use_vqvae = use_vqvae
         self.device = device
         self.llm_embedding_size = llm.model.embed_tokens.weight.shape[1]
         self.encoder = CLIPTactileEncoder(clip_model=clip_model)
@@ -167,13 +165,24 @@ class MultimodalLLMForCausalLM(nn.Module):
         full_embeds_len = question_embeds.shape[1] + answer_embeds.shape[1]
         question_embeds_len = question_embeds.shape[1]
         batch_size = question_embeds.shape[0]
+        if full_embeds_len > self.cutoff_len:
+            raise RuntimeError(f"Sample exceeds cutoff_len: full={full_embeds_len} > cutoff={self.cutoff_len}")
         # NOTE: padding token embedding index is 0
         padding_embeds = self.llm.get_input_embeddings()(torch.zeros(batch_size, self.cutoff_len - full_embeds_len, device=llm_device, dtype=torch.int64))
-        # 3) combine embeds
-        input_embeds = torch.cat((question_embeds, answer_embeds, padding_embeds), dim=1)
+        # 3) combine embeds. Cast to LLM dtype because projected visual embeds are fp32
+        # while embed_tokens may be bf16/fp16.
+        llm_dtype = self.llm.get_input_embeddings().weight.dtype
+        input_embeds = torch.cat((question_embeds, answer_embeds, padding_embeds), dim=1).to(llm_dtype)
         pre_label_dummy_token, post_label_dummy_token = self.get_dummy_token(answer_embeds, question_embeds_len)
         labels = torch.cat((pre_label_dummy_token.to(llm_device), answer_tokens, post_label_dummy_token.to(llm_device)), dim=1)
         batch_size = answer_embeds.shape[0]
         attention_mask = torch.cat((torch.ones([batch_size, full_embeds_len]), torch.zeros([batch_size, padding_embeds.shape[1]])), dim=1).to(llm_device)
-        out = self.llm(inputs_embeds=input_embeds, labels=labels, attention_mask=attention_mask) # pass in embeddings directly: https://huggingface.co/docs/transformers/main/en/model_doc/llama
+        seq_len = input_embeds.shape[1]
+        position_ids = torch.arange(0, seq_len, dtype=torch.long, device=llm_device).unsqueeze(0).expand(batch_size, -1)
+        raw_out = self.llm(inputs_embeds=input_embeds, attention_mask=attention_mask, position_ids=position_ids)
+        logits = raw_out.logits.float()
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous().to(shift_logits.device)
+        loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=-100)
+        out = CausalLMOutputWithPast(loss=loss, logits=logits)
         return out, question_embeds

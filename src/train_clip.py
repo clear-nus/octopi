@@ -1,6 +1,6 @@
-import os 
-import torch.nn as nn 
-import torch 
+import os
+import torch.nn as nn
+import torch
 from torch.utils.data import DataLoader
 from torch import optim
 import tqdm
@@ -32,9 +32,10 @@ def main(configs, exp_name, g, device):
     except Exception as e:
         print(f"Failed to load CLIP ImageProcessor: {e}. Ensure you have internet access or the model is cached/downloaded.")
         raise
-    train_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="train", flip_p=configs["flip_p"])
-    val_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="val")
-    test_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="test")
+    max_frames = configs.get("max_frames", 5)
+    train_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="train", flip_p=configs["flip_p"], max_frames=max_frames)
+    val_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="val", max_frames=max_frames)
+    test_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="test", max_frames=max_frames)
     train_loader = DataLoader(train_dataset, batch_size=configs["batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g)
@@ -46,17 +47,30 @@ def main(configs, exp_name, g, device):
     else:
         clip = CLIPModel.from_pretrained(configs["use_clip"]).to(device)
     vificlip = ViFiCLIP(clip, freeze_text_encoder=True).to(device)
+    unfreeze_last_n = configs.get("unfreeze_last_n_layers", 0)
+    finetune_lr = configs.get("finetune_lr", 1e-5)
     if configs["prompt_learning"]:
+        total_layers = vificlip.clip_model.config.vision_config.num_hidden_layers
         for name, param in vificlip.named_parameters():
-            # Make sure that VPT prompts are updated
             if "VPT" in name:
                 param.requires_grad_(True)
+            elif unfreeze_last_n > 0 and "vision_model.encoder.layers" in name:
+                try:
+                    layer_idx = int(name.split("vision_model.encoder.layers.")[1].split(".")[0])
+                    param.requires_grad_(layer_idx >= total_layers - unfreeze_last_n)
+                except (IndexError, ValueError):
+                    param.requires_grad_(False)
             else:
                 param.requires_grad_(False)
     # training
     evaluator = PropertyClassifierEvaluator()
-    loss_fn = torch.nn.CrossEntropyLoss()
-    optimizer_clip = torch.optim.AdamW(vificlip.parameters(), lr=configs["lr"])
+    loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=configs.get("label_smoothing", 0.1))
+    vpt_params = [p for n, p in vificlip.named_parameters() if "VPT" in n and p.requires_grad]
+    finetune_params = [p for n, p in vificlip.named_parameters() if "VPT" not in n and p.requires_grad]
+    optimizer_clip_groups = [{"params": vpt_params, "lr": configs["lr"]}]
+    if finetune_params:
+        optimizer_clip_groups.append({"params": finetune_params, "lr": finetune_lr})
+    optimizer_clip = torch.optim.AdamW(optimizer_clip_groups)
     optimizer_classifier = torch.optim.AdamW(classifier.parameters(), lr=configs["classifier_lr"])
     # Calculate total steps across all epochs
     total_steps = (len(train_loader) / configs["gradient_accumulation_steps"]) * configs["num_epochs"]
@@ -87,6 +101,8 @@ def main(configs, exp_name, g, device):
             loss = (loss_fn(hardness_preds, hardness_labels) + loss_fn(roughness_preds, roughness_labels) + loss_fn(texture_preds, texture_labels)) / configs["gradient_accumulation_steps"]
             loss.backward()
             if (train_batch_step + 1) % configs["gradient_accumulation_steps"] == 0:
+                torch.nn.utils.clip_grad_norm_(vificlip.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=1.0)
                 optimizer_clip.step()
                 optimizer_classifier.step()
                 scheduler_clip.step()
@@ -148,9 +164,10 @@ def main(configs, exp_name, g, device):
         print(f"TRAIN accuracies [hardness, roughness, texture, combined]: {total_train_hardness_correct / num_train_samples}, {total_train_roughness_correct / num_train_samples}, {total_train_texture_correct / num_train_samples}, {total_train_combined_correct / num_train_samples}")
         print(f"VAL accuracies [hardness, roughness, texture, combined]: {total_val_hardness_correct / num_val_samples}, {total_val_roughness_correct / num_val_samples}, {total_val_texture_correct / num_val_samples}, {total_val_combined_correct / num_val_samples}")
         print(f"TEST accuracies [hardness, roughness, texture, combined]: {total_test_hardness_correct / num_test_samples}, {total_test_roughness_correct / num_test_samples}, {total_test_texture_correct / num_test_samples}, {total_test_combined_correct / num_test_samples}")
-        if total_val_combined_correct / num_val_samples > best_val_acc:
+        val_mean_acc = (total_val_hardness_correct + total_val_roughness_correct + total_val_texture_correct) / (3 * num_val_samples)
+        if val_mean_acc > best_val_acc:
             print("Saving encoder...")
-            best_val_acc = total_val_combined_correct / num_val_samples
+            best_val_acc = val_mean_acc
             encoder.model.vision_model = vificlip.clip_model.vision_model
             torch.save(encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
             torch.save(classifier.state_dict(), f"{configs['exps_path']}/{exp_name}/classifier.pt")

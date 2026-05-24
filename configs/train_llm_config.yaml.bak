@@ -3,8 +3,8 @@ gpu_config: configs/gpu_config_7b.json
 cuda: 6
 seed: 0
 exps_path: exps
-train: false
-val: false
+train: true
+val: true
 test: true
 flip_p: 0.5
 max_frames: 8
@@ -21,7 +21,7 @@ prompt_depth_text: 12
 dim_context_text: 768
 freeze_projection: false
 projection_lr: 2.0e-05
-projection_path: exps/2026_05_23_20_26_52_train_llm_train_val_test_lora_128_128_vicuna-7b_3000_bf16_singlegpu_smoke2/best_project.pt
+projection_path: exps/2026_05_23_12_26_50_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0/best_project.pt
 train_files:
 - /data/samson/octopi/data/train_qa.json
 val_files:
@@ -35,9 +35,9 @@ cutoff_len: 512
 offload_dir: ./
 llm_lr: 2.0e-05
 quantized: false
-tokenizer_path: exps/2026_05_23_20_26_52_train_llm_train_val_test_lora_128_128_vicuna-7b_3000_bf16_singlegpu_smoke2/tokenizer
-llm_path: exps/2026_05_23_20_26_52_train_llm_train_val_test_lora_128_128_vicuna-7b_3000_bf16_singlegpu_smoke2/best_llm_weights
-lora_trained: true
+tokenizer_path: exps/2026_05_23_12_26_50_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0/tokenizer
+llm_path: exps/2026_05_23_12_26_50_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0/best_llm_weights.pt
+lora_trained: false
 use_lora: true
 lora_alpha: 128
 r: 128

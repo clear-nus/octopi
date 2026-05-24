@@ -40,10 +40,11 @@ def get_frames(frames_path, image_processor, transforms_image, max_length=5, ski
     
 
 class CLIPPropertyUniqueDataset(Dataset):
-    def __init__(self, image_processor, data_path, split_name, flip_p=0):
+    def __init__(self, image_processor, data_path, split_name, flip_p=0, max_frames=5):
         super().__init__()
         self.split_name = split_name
         self.flip_p = flip_p
+        self.max_frames = max_frames
         self.image_processor = image_processor
         self.properties = ["hardness", "roughness", "texture"]
         json_path = [os.path.join(data_path, f"{self.split_name}_samples.json")]
@@ -78,9 +79,9 @@ class CLIPPropertyUniqueDataset(Dataset):
         objects_tactile_frames = []
         all_indices = []
         if self.split_name == "train":
-            frames, indices = get_frames(video, self.image_processor, transforms_image, skip=False, return_indices=True)
+            frames, indices = get_frames(video, self.image_processor, transforms_image, max_length=self.max_frames, skip=False, return_indices=True)
         else:
-            frames, indices = get_frames(video, self.image_processor, transforms_image, return_indices=True)
+            frames, indices = get_frames(video, self.image_processor, transforms_image, max_length=self.max_frames, return_indices=True)
         objects_tactile_frames.append(frames) # [(l, c, h, w)]
         all_indices.append(indices)
         # get label
@@ -108,7 +109,7 @@ class CLIPPropertyUniqueDataset(Dataset):
 
 
 class TactileLLMDataset(Dataset):
-    def __init__(self, image_processor, files, split_name, tokenizer, flip_p):
+    def __init__(self, image_processor, files, split_name, tokenizer, flip_p, random_frames=False, max_frames=5):
         super().__init__()
         self.split_name = split_name
         self.tokenizer = tokenizer
@@ -117,6 +118,8 @@ class TactileLLMDataset(Dataset):
         self.pad_token = tokenizer.pad_token
         self.eos_token_number = self.tokenizer.encode(self.eos_token)
         self.flip_p = flip_p
+        self.random_frames = random_frames
+        self.max_frames = max_frames
         self.image_processor = image_processor
         self.samples = None
         for f in files:
@@ -177,10 +180,10 @@ class TactileLLMDataset(Dataset):
         all_tactile_frames = []
         all_indices = []
         for t in tactile:
-            if self.split_name == "train":
-                frames, indices = get_frames(t, self.image_processor, transforms_image, skip=False, return_indices=True)
+            if self.split_name == "train" or self.random_frames:
+                frames, indices = get_frames(t, self.image_processor, transforms_image, max_length=self.max_frames, skip=False, return_indices=True)
             else:
-                frames, indices = get_frames(t, self.image_processor, transforms_image, return_indices=True)
+                frames, indices = get_frames(t, self.image_processor, transforms_image, max_length=self.max_frames, return_indices=True)
             all_tactile_frames.append(frames)
             all_indices.append(indices)
         return question, answer_tokens, all_tactile_frames, tactile, question_type, question_step, all_indices
