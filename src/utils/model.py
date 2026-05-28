@@ -15,8 +15,7 @@ class CLIPTactileEncoder(nn.Module):
         b, l, c, h, w = tactile_embeds.shape # (b, l, c, h, w)
         tactile_embeds = tactile_embeds.reshape(b * l, c, h, w) # (b * l, c, h, w)
         tactile_forward_outs = self.model(tactile_embeds, output_hidden_states=True)
-        # Best Practice: Use Layer -2 CLS token to match LLM input
-        tactile_features = tactile_forward_outs.hidden_states[-2][:, 0].to(tactile_embeds.dtype) 
+        tactile_features = tactile_forward_outs.hidden_states[-2][:, 0].to(tactile_embeds.dtype)
         _, patch_embed_size = tactile_features.shape
         tactile_features = tactile_features.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
         return tactile_features
@@ -28,9 +27,9 @@ class CLIPClassifier(nn.Module):
         self.fc = nn.Linear(output_size, 512)
         self.act = nn.ReLU()
         self.dropout = nn.Dropout(0.5)
-        self.hardness_fc = nn.Linear(512, len(list(HARDNESS_MAP.keys())))
-        self.roughness_fc = nn.Linear(512, len(list(ROUGHNESS_MAP.keys())))
-        self.texture_fc = nn.Linear(512, len(list(TEXTURE_MAP.keys())))
+        self.hardness_fc = nn.Linear(512, 3)
+        self.roughness_fc = nn.Linear(512, 3)
+        self.texture_fc = nn.Linear(512, 3)
 
     def forward(self, vision_features):
         vision_features = self.act(self.dropout(self.fc(vision_features)))
@@ -57,9 +56,10 @@ def sinusoidal_positional_embedding(token_sequence_size, indices, token_embeddin
 
     
 class ViFiCLIP(nn.Module):
-    def __init__(self, clip_model, freeze_text_encoder):
+    def __init__(self, clip_model, freeze_text_encoder, fusion_layers=None):
         super().__init__()
         self.clip_model = clip_model
+        self.fusion_layers = fusion_layers if fusion_layers is not None else [-2]
         if freeze_text_encoder:
             for name, param in self.clip_model.named_parameters():
                 if "text_model" in name:
@@ -69,15 +69,14 @@ class ViFiCLIP(nn.Module):
         # video
         b, l, c, h, w = tactile_frames.shape # (b, l, c, h, w)
         tactile_frames = tactile_frames.reshape(b * l, c, h, w) # (b * l, c, h, w)
-        # Best Practice: Use Layer -2 CLS token to match LLM input
         vision_outputs = self.clip_model.vision_model(tactile_frames, output_hidden_states=True)
-        # pooled_output = vision_outputs.pooler_output # (b * l, patch_embed_size)
-        pooled_output = vision_outputs.hidden_states[-2][:, 0].to(tactile_frames.dtype) # Use layer -2 CLS token
-        _, patch_embed_size = pooled_output.shape
-        pooled_output = pooled_output.reshape(b, l, patch_embed_size) # (b, l, patch_embed_size)
-        vision_features = pooled_output
-        video_features = vision_features.mean(dim=1, keepdim=False)
-        video_features = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
+        pooled_output = vision_outputs.hidden_states[-2][:, 0].to(tactile_frames.dtype)
+        pooled_output = pooled_output.reshape(b, l, pooled_output.shape[-1]) # (b, l, d)
+        feat_mean = pooled_output.mean(dim=1)  # (b, d)
+        if texts is None:
+            return feat_mean, None, None, None
+        # contrastive mode: normalised mean only
+        video_features = feat_mean / feat_mean.norm(p=2, dim=-1, keepdim=True)
         if texts is not None:
             # text
             text_outputs = self.clip_model.text_model(texts, attention_mask=attention_masks)
@@ -108,6 +107,7 @@ class MultimodalLLMForCausalLM(nn.Module):
         self.project = nn.Sequential(
             nn.Linear(encoder_output_size, self.llm_embedding_size),
             nn.GELU(),
+            nn.LayerNorm(self.llm_embedding_size),
             nn.Linear(self.llm_embedding_size, self.llm_embedding_size),
         )
 
@@ -120,7 +120,7 @@ class MultimodalLLMForCausalLM(nn.Module):
         post_label_token = torch.full((batch_size, self.cutoff_len - (question_embeds_len + answer_embeds_len + index_shift)), fill_value=-100, dtype=torch.int64, device=self.device)
         return pre_label_token, post_label_token
 
-    def forward(self, question, tactile_frames, answer_tokens, all_indices, images=None):
+    def forward(self, question, tactile_frames, answer_tokens, all_indices, images=None, conclusion_start=None):
         # 1) question embeds
         question_embeds = []
         img_token_count = 0
@@ -174,7 +174,18 @@ class MultimodalLLMForCausalLM(nn.Module):
         llm_dtype = self.llm.get_input_embeddings().weight.dtype
         input_embeds = torch.cat((question_embeds, answer_embeds, padding_embeds), dim=1).to(llm_dtype)
         pre_label_dummy_token, post_label_dummy_token = self.get_dummy_token(answer_embeds, question_embeds_len)
-        labels = torch.cat((pre_label_dummy_token.to(llm_device), answer_tokens, post_label_dummy_token.to(llm_device)), dim=1)
+        # Outcome supervision: mask description tokens, only backprop through conclusion.
+        # conclusion_start=0 means no mask (OPD has no "Conclusion:" so full loss applies).
+        if conclusion_start is not None:
+            cs = int(conclusion_start[0].item() if torch.is_tensor(conclusion_start) else conclusion_start)
+            if cs > 0:
+                answer_labels = answer_tokens.clone()
+                answer_labels[:, :cs] = -100
+            else:
+                answer_labels = answer_tokens
+        else:
+            answer_labels = answer_tokens
+        labels = torch.cat((pre_label_dummy_token.to(llm_device), answer_labels, post_label_dummy_token.to(llm_device)), dim=1)
         batch_size = answer_embeds.shape[0]
         attention_mask = torch.cat((torch.ones([batch_size, full_embeds_len]), torch.zeros([batch_size, padding_embeds.shape[1]])), dim=1).to(llm_device)
         seq_len = input_embeds.shape[1]

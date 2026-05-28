@@ -3,15 +3,18 @@ gpu_config: configs/gpu_config_7b.json
 cuda: 6
 seed: 0
 exps_path: exps
-train: false
-val: false
+train: true
+val: true
 test: true
 flip_p: 0.5
+rotation_degrees: 20
+color_jitter: 0.1
+gaussian_blur: true
 max_frames: 8
 use_clip: openai/clip-vit-large-patch14
 freeze_encoder: true
 encoder_lr: 1.0e-05
-encoder_path: exps/2026_05_23_11_53_52_train_clip_clip_seed_0/encoder.pt
+encoder_path: exps/2026_05_24_11_44_45_train_clip_clip_seed_0/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
 prompt_depth_vision: 12
@@ -20,8 +23,8 @@ num_context_text: 4
 prompt_depth_text: 12
 dim_context_text: 768
 freeze_projection: false
-projection_lr: 2.0e-05
-projection_path: exps/2026_05_23_20_26_52_train_llm_train_val_test_lora_128_128_vicuna-7b_3000_bf16_singlegpu_smoke2/best_project.pt
+projection_lr: 1.0e-05
+projection_path: exps/2026_05_24_23_40_53_train_llm_train_val_test_lora_32_32_vicuna-7b_3000_full_pipeline_0_lora_r32_lr0.0001/best_project.pt
 train_files:
 - /data/samson/octopi/data/train_qa.json
 val_files:
@@ -33,14 +36,14 @@ test_files:
 model_type: vicuna-7b
 cutoff_len: 512
 offload_dir: ./
-llm_lr: 2.0e-05
+llm_lr: 1.0e-05
 quantized: false
-tokenizer_path: exps/2026_05_23_20_26_52_train_llm_train_val_test_lora_128_128_vicuna-7b_3000_bf16_singlegpu_smoke2/tokenizer
-llm_path: exps/2026_05_23_20_26_52_train_llm_train_val_test_lora_128_128_vicuna-7b_3000_bf16_singlegpu_smoke2/best_llm_weights
-lora_trained: true
+tokenizer_path: exps/2026_05_24_23_40_53_train_llm_train_val_test_lora_32_32_vicuna-7b_3000_full_pipeline_0_lora_r32_lr0.0001/tokenizer
+llm_path: exps/2026_05_24_23_40_53_train_llm_train_val_test_lora_32_32_vicuna-7b_3000_full_pipeline_0_lora_r32_lr0.0001/best_llm_weights
+lora_trained: false
 use_lora: true
-lora_alpha: 128
-r: 128
+lora_alpha: 32
+r: 32
 lora_dropout: 0.05
 target_modules:
 - q_proj
@@ -53,13 +56,14 @@ target_modules:
 modules_to_save:
 - embed_tokens
 bias: none
-max_train_steps: 3000
+max_train_steps: 1500
 per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
-warmup_steps: 20
-val_freq: 150
+warmup_steps: 30
+val_freq: 100
 val_subset_size: null
-tta_passes: 3
+tta_passes: 1
+conclusion_only_loss: true
 per_device_val_batch_size: 1
 max_new_tokens:
   train_object_property_description: 100

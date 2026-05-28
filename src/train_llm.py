@@ -6,7 +6,7 @@ from torch import optim
 import tqdm
 import json
 import numpy as np
-from peft import PeftModel, PeftConfig, get_peft_model, LoraConfig
+from peft import PeftModel, PeftConfig, get_peft_model, LoraConfig, set_peft_model_state_dict
 from accelerate import infer_auto_device_map, init_empty_weights
 from utils.dataset import *
 from utils.promptclip import *
@@ -59,7 +59,7 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
         for i, batch in enumerate(tqdm.tqdm(val_loader, desc="Evaluating metrics")):
             if val_subset_size is not None and i >= val_subset_size:
                 break
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
             answer_tokens = answer_tokens.to(device)
             outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
             val_loss_total += outputs.loss.item()
@@ -100,7 +100,7 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
             if configs.get("val_subset_size") is not None and test_sample_step >= configs["val_subset_size"]:
                 break
             # NOTE: hardcoded for batch size of 1
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
             answer_tokens = answer_tokens.to(device)
             outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
             max_new_tokens = configs["max_new_tokens"][question_type[0]]
@@ -179,7 +179,7 @@ def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, co
         pass_meta = []
         with torch.no_grad():
             for batch in tqdm.tqdm(loader, desc=f"TTA pass {pass_idx + 1}/{n_passes}"):
-                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
                 answer_tokens = answer_tokens.to(device)
                 _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
                 max_new_tokens = configs["max_new_tokens"][question_type[0]]
@@ -279,6 +279,9 @@ def train(configs, exp_name, g):
                 if configs["llm_path"].endswith(".pt"):
                     # if llm_path is a .pt file, we load the base model first
                     pass
+                elif os.path.isfile(os.path.join(configs["llm_path"], "adapter_config.json")):
+                    # LoRA adapter dir - keep model_path as base model (e.g. vicuna-7b-v1.5)
+                    pass
                 else:
                     model_path = configs["llm_path"]
         with init_empty_weights():
@@ -362,11 +365,12 @@ def train(configs, exp_name, g):
             raise
     max_frames = configs.get("max_frames", 5)
     if configs["train"]:
-        train_dataset = TactileLLMDataset(image_processor, configs["train_files"], split_name="train", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
+        train_dataset = TactileLLMDataset(image_processor, configs["train_files"], split_name="train", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames,
+            rotation_degrees=configs.get("rotation_degrees", 0), color_jitter=configs.get("color_jitter", 0.0), gaussian_blur=configs.get("gaussian_blur", False))
         train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     if configs["val"]:
         val_dataset = TactileLLMDataset(image_processor, configs["val_files"], split_name="val", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
-        val_loader = DataLoader(val_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
+        val_loader = DataLoader(val_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
     if configs["test"]:
         test_dataset = TactileLLMDataset(image_processor, configs["test_files"], split_name="test", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
         test_loader = DataLoader(test_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
@@ -426,12 +430,21 @@ def train(configs, exp_name, g):
                         pass
 
         if configs["quantized"]:
-            # If we are not loading from disk, ‘llm’ is already the PeftModel from above
             pass
-            # llm = PeftModel.from_pretrained(model=llm, model_id=llm_weights_path, is_trainable=True, device_map="auto", max_memory=gpu_max_mem_config, quantization_config=bnb_config)
         else:
-            # llm = PeftModel.from_pretrained(model=llm, model_id=llm_weights_path, is_trainable=True, device_map="auto", max_memory=gpu_max_mem_config)
-             pass
+            pass
+        # Load pre-trained LoRA weights for continued training (e.g., Stage 3 from Stage 2 checkpoint)
+        if configs["llm_path"] is not None and not configs["llm_path"].endswith(".pt"):
+            adapter_bin = os.path.join(configs["llm_path"], "adapter_model.bin")
+            if os.path.isfile(adapter_bin):
+                print(f"Loading Stage 2 LoRA weights from {configs['llm_path']}...")
+                lora_state = torch.load(adapter_bin, map_location="cpu", weights_only=True)
+                set_peft_model_state_dict(llm, lora_state)
+                # Cast loaded LoRA weights to match base weight dtype/device
+                for module in llm.modules():
+                    if hasattr(module, 'lora_A') and hasattr(module, 'lora_B') and hasattr(module, 'weight'):
+                        module.lora_A.to(device=module.weight.device, dtype=module.weight.dtype)
+                        module.lora_B.to(device=module.weight.device, dtype=module.weight.dtype)
         model.llm = llm
     else:
         model.llm = llm
@@ -574,9 +587,10 @@ def train(configs, exp_name, g):
         # total_train_loss = 0
         # NOTE: do not calculate stats during training to save time
         for train_sample_step, batch in enumerate(t:=tqdm.tqdm(train_loader)):
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
             answer_tokens = answer_tokens.to(device)
-            outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+            cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
+            outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
             train_loss = outputs.loss.detach().float()
             t.set_description(f"Train loss: {train_loss}")
             # total_train_loss += train_loss # NOTE: hardcoded for batch size of 1
@@ -584,10 +598,17 @@ def train(configs, exp_name, g):
             loss.backward()
             if (train_sample_step + 1) % configs["llm_gradient_accumulation_steps"] == 0:
                 if len(optimizer_grouped_parameters) > 0:
-                    torch.nn.utils.clip_grad_norm_(llm_params + project_params + encoder_params, max_norm=1.0)
+                    # Clip each parameter group separately so one group's large gradients
+                    # don't suppress another group's learning signal
+                    llm_gn = torch.nn.utils.clip_grad_norm_(llm_params, max_norm=1.0) if llm_params else 0.0
+                    proj_gn = torch.nn.utils.clip_grad_norm_(project_params, max_norm=1.0) if project_params else 0.0
+                    enc_gn = torch.nn.utils.clip_grad_norm_(encoder_params, max_norm=1.0) if encoder_params else 0.0
                     optimizer_llm.step()
                     scheduler_llm.step()
                     optimizer_llm.zero_grad()
+                    t.set_postfix(loss=train_loss.item(),
+                                  llm_gn=llm_gn.item() if torch.is_tensor(llm_gn) else llm_gn,
+                                  proj_gn=proj_gn.item() if torch.is_tensor(proj_gn) else proj_gn)
                     # Ensure frozen token embeddings are not corrupted by AdamW weight decay or variance tracking
                     if any("embed_tokens" in n for n, p in model.llm.named_parameters() if p.requires_grad):
                         with torch.no_grad():
@@ -658,17 +679,15 @@ def train(configs, exp_name, g):
             # Reload LLM
             if configs["use_lora"]:
                 best_llm_path = f"{configs['exps_path']}/{exp_name}/best_llm_weights"
-                if os.path.exists(best_llm_path):
-                    try:
-                        if hasattr(model.llm, "load_adapter"):
-                            model.llm.load_adapter(best_llm_path, adapter_name="default")
-                            model.llm.set_adapter("default")
-                        else:
-                            model.llm = PeftModel.from_pretrained(model.llm, best_llm_path)
-                    except Exception as e:
-                        print(f"Fallback Load: {e}")
-                        model.llm.load_state_dict(torch.load(best_llm_path+'/adapter_model.bin', map_location=device), strict=False)
-                    # Cast reloaded LoRA params to match base weight dtype (e.g., bf16)
+                adapter_bin = os.path.join(best_llm_path, 'adapter_model.bin')
+                if os.path.exists(adapter_bin):
+                    # Use load_state_dict directly — PeftModel.from_pretrained would double-wrap
+                    # an existing PeftModel and corrupt the model. strict=False loads LoRA
+                    # weights and embed_tokens (modules_to_save) while skipping base weights.
+                    print(f"Loading best LoRA adapter from {adapter_bin}...")
+                    adapter_weights = torch.load(adapter_bin, map_location='cpu', weights_only=True)
+                    model.llm.load_state_dict(adapter_weights, strict=False)
+                    # Cast reloaded LoRA params to bf16 to match base model dtype
                     for module in model.llm.modules():
                         if hasattr(module, 'lora_A') and hasattr(module, 'lora_B') and hasattr(module, 'weight'):
                             td = module.weight.device

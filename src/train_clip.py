@@ -17,12 +17,105 @@ from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup
 from transformers.utils import logging
 
 
+import torch.nn.functional as F
+
+
+def ordinal_predict(logits):
+    return logits.argmax(dim=1)
+
+
+def ordinal_loss(logits, labels, n_classes=3, smoothing=0.1, weight=None):
+    """Label-smoothed cross-entropy with optional per-class weighting."""
+    if smoothing > 0:
+        n = logits.size(-1)
+        with torch.no_grad():
+            smooth = torch.full_like(logits, smoothing / (n - 1))
+            smooth.scatter_(1, labels.unsqueeze(1), 1.0 - smoothing)
+        log_prob = F.log_softmax(logits, dim=-1)
+        per_sample = -(smooth * log_prob).sum(dim=-1)
+        if weight is not None:
+            w = weight[labels]
+            return (per_sample * w).sum() / w.sum().clamp_min(1e-8)
+        return per_sample.mean()
+    return F.cross_entropy(logits, labels, weight=weight)
+
+
+def compute_class_weights(objects, n_classes=3, device="cpu"):
+    """Per-class weights with strength scaled by each property's train imbalance.
+
+    Interpolates between uniform (balanced property) and mean-1 inverse-frequency
+    (skewed property) using alpha = 1 - 1/ratio, where ratio = max/min class count.
+    No threshold to tune; balanced properties (e.g. roughness) stay ~uniform on their
+    own, which also limits shared-trunk interference with the skewed heads.
+    """
+    from collections import Counter
+    weights = {}
+    for prop in ["hardness", "roughness", "texture"]:
+        counts = Counter(RANKS[prop][o] for o in objects)
+        counts = {c: counts.get(c, 0) for c in range(n_classes)}
+        total = sum(counts.values())
+        inv = torch.tensor(
+            [total / (n_classes * max(counts[c], 1)) for c in range(n_classes)],
+            dtype=torch.float32, device=device,
+        )
+        inv = inv / inv.mean()
+        ratio = max(counts.values()) / max(min(counts.values()), 1)
+        alpha = 1.0 - 1.0 / ratio
+        w = (1.0 - alpha) * torch.ones_like(inv) + alpha * inv
+        weights[prop] = w / w.mean()
+    return weights
+
+
+class EMA:
+    """Exponential moving average over a fixed list of parameter tensors.
+
+    Training proceeds on the raw weights; call apply_shadow() before eval/save and
+    restore() afterward so checkpoints reflect the averaged (lower-variance) weights.
+    """
+    def __init__(self, params, decay):
+        self.decay = decay
+        self.params = list(params)
+        self.shadow = [p.detach().clone() for p in self.params]
+        self.backup = None
+
+    def update(self):
+        with torch.no_grad():
+            for s, p in zip(self.shadow, self.params):
+                s.mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
+
+    def apply_shadow(self):
+        self.backup = [p.detach().clone() for p in self.params]
+        with torch.no_grad():
+            for s, p in zip(self.shadow, self.params):
+                p.copy_(s)
+
+    def restore(self):
+        with torch.no_grad():
+            for b, p in zip(self.backup, self.params):
+                p.copy_(b)
+        self.backup = None
+
+
+def pairwise_ranking_loss(logits, labels, margin=1.0):
+    """Margin ranking loss on softmax expected rank within a batch."""
+    n_classes = logits.size(-1)
+    ranks = torch.arange(n_classes, device=logits.device).float()
+    expected = (F.softmax(logits, dim=-1) * ranks).sum(dim=-1)  # (B,)
+    labels_f = labels.float()
+    label_diff = labels_f.unsqueeze(0) - labels_f.unsqueeze(1)   # (B, B)
+    score_diff = expected.unsqueeze(0) - expected.unsqueeze(1)    # (B, B)
+    mask = (label_diff > 0).float()
+    loss = torch.clamp(margin - score_diff, min=0.0) * mask
+    n_pairs = mask.sum()
+    return loss.sum() / n_pairs if n_pairs > 0 else loss.sum()
+
+
 class PropertyClassifierEvaluator:
     def evaluate(self, preds, labels):
         return self.get_correct_num(preds, labels)
-    
+
     def get_correct_num(self, preds, labels):
-        return (labels == torch.argmax(preds, dim=1)).sum().item()
+        return (labels == ordinal_predict(preds)).sum().item()
 
 
 def main(configs, exp_name, g, device):
@@ -33,7 +126,8 @@ def main(configs, exp_name, g, device):
         print(f"Failed to load CLIP ImageProcessor: {e}. Ensure you have internet access or the model is cached/downloaded.")
         raise
     max_frames = configs.get("max_frames", 5)
-    train_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="train", flip_p=configs["flip_p"], max_frames=max_frames)
+    train_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="train", flip_p=configs["flip_p"], max_frames=max_frames,
+        rotation_degrees=configs.get("rotation_degrees", 0), color_jitter=configs.get("color_jitter", 0.0), gaussian_blur=configs.get("gaussian_blur", False))
     val_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="val", max_frames=max_frames)
     test_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="test", max_frames=max_frames)
     train_loader = DataLoader(train_dataset, batch_size=configs["batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
@@ -46,7 +140,8 @@ def main(configs, exp_name, g, device):
         clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
     else:
         clip = CLIPModel.from_pretrained(configs["use_clip"]).to(device)
-    vificlip = ViFiCLIP(clip, freeze_text_encoder=True).to(device)
+    fusion_layers = configs.get("fusion_layers", [-2])
+    vificlip = ViFiCLIP(clip, freeze_text_encoder=True, fusion_layers=fusion_layers).to(device)
     unfreeze_last_n = configs.get("unfreeze_last_n_layers", 0)
     finetune_lr = configs.get("finetune_lr", 1e-5)
     if configs["prompt_learning"]:
@@ -62,16 +157,25 @@ def main(configs, exp_name, g, device):
                     param.requires_grad_(False)
             else:
                 param.requires_grad_(False)
+    if configs.get("freeze_clip", False):
+        for param in vificlip.parameters():
+            param.requires_grad_(False)
     # training
     evaluator = PropertyClassifierEvaluator()
-    loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=configs.get("label_smoothing", 0.1))
+    smoothing = configs.get("label_smoothing", 0.1)
+    class_weights = {"hardness": None, "roughness": None, "texture": None}
+    if configs.get("class_balanced_loss", False):
+        class_weights = compute_class_weights(train_dataset.objects, device=device)
+        print(f"Class-balanced loss ON. Weights: "
+              f"{ {k: [round(x, 3) for x in v.tolist()] for k, v in class_weights.items()} }")
     vpt_params = [p for n, p in vificlip.named_parameters() if "VPT" in n and p.requires_grad]
     finetune_params = [p for n, p in vificlip.named_parameters() if "VPT" not in n and p.requires_grad]
     optimizer_clip_groups = [{"params": vpt_params, "lr": configs["lr"]}]
     if finetune_params:
         optimizer_clip_groups.append({"params": finetune_params, "lr": finetune_lr})
-    optimizer_clip = torch.optim.AdamW(optimizer_clip_groups)
-    optimizer_classifier = torch.optim.AdamW(classifier.parameters(), lr=configs["classifier_lr"])
+    weight_decay = configs.get("weight_decay", 0.01)
+    optimizer_clip = torch.optim.AdamW(optimizer_clip_groups, weight_decay=weight_decay)
+    optimizer_classifier = torch.optim.AdamW(classifier.parameters(), lr=configs["classifier_lr"], weight_decay=weight_decay)
     # Calculate total steps across all epochs
     total_steps = (len(train_loader) / configs["gradient_accumulation_steps"]) * configs["num_epochs"]
     warmup_steps = int(configs.get("warmup_ratio", 0.05) * total_steps) # Default to 5% warmup
@@ -81,6 +185,12 @@ def main(configs, exp_name, g, device):
     scheduler_classifier = get_cosine_schedule_with_warmup(
         optimizer_classifier, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
+    ema_decay = configs.get("ema_decay", 0.0) or 0.0
+    ema = None
+    if ema_decay > 0:
+        ema_params = vpt_params + finetune_params + list(classifier.parameters())
+        ema = EMA(ema_params, ema_decay)
+        print(f"EMA ON (decay={ema_decay}) over {len(ema_params)} param tensors")
     best_val_acc = -1
     epochs = configs["num_epochs"]
     for epoch in tqdm.tqdm(range(epochs)):
@@ -98,7 +208,18 @@ def main(configs, exp_name, g, device):
                 all_tactile_embeds.append(video_features) # [(batch_size, output_size)]
             all_tactile_embeds = torch.cat(all_tactile_embeds, dim=-1) # (batch_size, output_size)
             hardness_preds, roughness_preds, texture_preds = classifier(all_tactile_embeds)
-            loss = (loss_fn(hardness_preds, hardness_labels) + loss_fn(roughness_preds, roughness_labels) + loss_fn(texture_preds, texture_labels)) / configs["gradient_accumulation_steps"]
+            ce_loss = ordinal_loss(hardness_preds, hardness_labels, smoothing=smoothing, weight=class_weights["hardness"]) + ordinal_loss(roughness_preds, roughness_labels, smoothing=smoothing, weight=class_weights["roughness"]) + ordinal_loss(texture_preds, texture_labels, smoothing=smoothing, weight=class_weights["texture"])
+            rank_w = configs.get("ranking_loss_weight", 0.0)
+            if rank_w > 0:
+                margin = configs.get("ranking_margin", 1.0)
+                rank_loss = (
+                    pairwise_ranking_loss(hardness_preds, hardness_labels, margin) +
+                    pairwise_ranking_loss(roughness_preds, roughness_labels, margin) +
+                    pairwise_ranking_loss(texture_preds, texture_labels, margin)
+                )
+                loss = (ce_loss + rank_w * rank_loss) / configs["gradient_accumulation_steps"]
+            else:
+                loss = ce_loss / configs["gradient_accumulation_steps"]
             loss.backward()
             if (train_batch_step + 1) % configs["gradient_accumulation_steps"] == 0:
                 torch.nn.utils.clip_grad_norm_(vificlip.parameters(), max_norm=1.0)
@@ -109,14 +230,18 @@ def main(configs, exp_name, g, device):
                 scheduler_classifier.step()
                 optimizer_clip.zero_grad()
                 optimizer_classifier.zero_grad()
+                if ema is not None:
+                    ema.update()
             num_train_samples += batch_size
             total_train_hardness_correct += evaluator.evaluate(hardness_preds, hardness_labels)
             total_train_roughness_correct += evaluator.evaluate(roughness_preds, roughness_labels)
             total_train_texture_correct += evaluator.evaluate(texture_preds, texture_labels)
-            combined_preds = torch.cat([torch.unsqueeze(torch.argmax(hardness_preds, dim=-1), dim=-1), torch.unsqueeze(torch.argmax(roughness_preds, dim=-1), dim=-1), torch.unsqueeze(torch.argmax(texture_preds, dim=-1), dim=-1)], dim=-1)
+            combined_preds = torch.stack([ordinal_predict(hardness_preds), ordinal_predict(roughness_preds), ordinal_predict(texture_preds)], dim=-1)
             combined_labels = torch.cat([torch.unsqueeze(hardness_labels, dim=-1), torch.unsqueeze(roughness_labels, dim=-1), torch.unsqueeze(texture_labels, dim=-1)], dim=-1)
             total_train_combined_correct += np.sum(np.all(combined_preds.cpu().detach().numpy() == combined_labels.cpu().detach().numpy(), axis=-1))
-        # validation
+        # validation (on EMA weights when enabled, so checkpoints reflect the average)
+        if ema is not None:
+            ema.apply_shadow()
         vificlip.eval()
         classifier.eval()
         # total_val_correct = 0
@@ -137,7 +262,7 @@ def main(configs, exp_name, g, device):
                 total_val_hardness_correct += evaluator.evaluate(hardness_preds, hardness_labels)
                 total_val_roughness_correct += evaluator.evaluate(roughness_preds, roughness_labels)
                 total_val_texture_correct += evaluator.evaluate(texture_preds, texture_labels)
-                combined_preds = torch.cat([torch.unsqueeze(torch.argmax(hardness_preds, dim=-1), dim=-1), torch.unsqueeze(torch.argmax(roughness_preds, dim=-1), dim=-1), torch.unsqueeze(torch.argmax(texture_preds, dim=-1), dim=-1)], dim=-1)
+                combined_preds = torch.stack([ordinal_predict(hardness_preds), ordinal_predict(roughness_preds), ordinal_predict(texture_preds)], dim=-1)
                 combined_labels = torch.cat([torch.unsqueeze(hardness_labels, dim=-1), torch.unsqueeze(roughness_labels, dim=-1), torch.unsqueeze(texture_labels, dim=-1)], dim=-1)
                 total_val_combined_correct += np.sum(np.all(combined_preds.cpu().detach().numpy() == combined_labels.cpu().detach().numpy(), axis=-1))
         total_test_hardness_correct, total_test_roughness_correct, total_test_texture_correct, total_test_combined_correct = 0, 0, 0, 0
@@ -157,7 +282,7 @@ def main(configs, exp_name, g, device):
                 total_test_hardness_correct += evaluator.evaluate(hardness_preds, hardness_labels)
                 total_test_roughness_correct += evaluator.evaluate(roughness_preds, roughness_labels)
                 total_test_texture_correct += evaluator.evaluate(texture_preds, texture_labels)
-                combined_preds = torch.cat([torch.unsqueeze(torch.argmax(hardness_preds, dim=-1), dim=-1), torch.unsqueeze(torch.argmax(roughness_preds, dim=-1), dim=-1), torch.unsqueeze(torch.argmax(texture_preds, dim=-1), dim=-1)], dim=-1)
+                combined_preds = torch.stack([ordinal_predict(hardness_preds), ordinal_predict(roughness_preds), ordinal_predict(texture_preds)], dim=-1)
                 combined_labels = torch.cat([torch.unsqueeze(hardness_labels, dim=-1), torch.unsqueeze(roughness_labels, dim=-1), torch.unsqueeze(texture_labels, dim=-1)], dim=-1)
                 total_test_combined_correct += np.sum(np.all(combined_preds.cpu().detach().numpy() == combined_labels.cpu().detach().numpy(), axis=-1))
         print(f"\nTRAIN epoch: {epoch+1} / {epochs}")
@@ -172,6 +297,8 @@ def main(configs, exp_name, g, device):
             torch.save(encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
             torch.save(classifier.state_dict(), f"{configs['exps_path']}/{exp_name}/classifier.pt")
             torch.save(vificlip.state_dict(), f"{configs['exps_path']}/{exp_name}/vificlip.pt")
+        if ema is not None:
+            ema.restore()
 
 
 if __name__ == "__main__":

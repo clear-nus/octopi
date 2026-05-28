@@ -6,8 +6,8 @@ set -euo pipefail
 SEEDS=(0)
 
 # Grid Search Parameters
-RANKS=(128)
-LRS=(0.0002 0.00005 0.00002)
+RANKS=(32 64 128)
+LRS=(0.0001 0.00005 0.00002)
 
 # Path to config file
 CONFIG_FILE="configs/train_llm_config.yaml"
@@ -53,7 +53,7 @@ for SEED in "${SEEDS[@]}"; do
         --key encoder_path --value "$ENCODER_PATH" \
         --key use_lora --value False \
         --key max_train_steps --value 3200 \
-        --key val_freq --value 400 \
+        --key val_freq --value 200 \
         --key projection_path --value null \
         --key tokenizer_path --value null \
         --key llm_path --value null \
@@ -63,7 +63,11 @@ for SEED in "${SEEDS[@]}"; do
         --key projection_lr --value 0.00005 \
         --key llm_lr --value 0.00005 \
         --key warmup_steps --value 20 \
-        --key llm_gradient_accumulation_steps --value 16
+        --key llm_gradient_accumulation_steps --value 16 \
+        --key train --value True \
+        --key val --value True \
+        --key test --value True \
+        --key tta_passes --value 1
 
     # Pass seed as experiment identifier
     export EXP_ID="full_pipeline_${SEED}"
@@ -109,13 +113,17 @@ for SEED in "${SEEDS[@]}"; do
                 --key modules_to_save --value "[embed_tokens]" \
                 --key projection_lr --value "$LR" \
                 --key llm_lr --value "$LR" \
-                --key warmup_steps --value 20 \
+                --key warmup_steps --value 50 \
                 --key val_freq --value 150 \
                 --key r --value "$R" \
                 --key lora_alpha --value "$ALPHA" \
                 --key lora_dropout --value 0.05 \
                 --key target_modules --value "[q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]" \
-                --key llm_gradient_accumulation_steps --value 16
+                --key llm_gradient_accumulation_steps --value 16 \
+                --key train --value True \
+                --key val --value True \
+                --key test --value True \
+                --key tta_passes --value 1
             
             export EXP_ID="full_pipeline_${SEED}_lora_r${R}_lr${LR}"
             echo "Running train_llm.py (Stage 2 - LoRA)..."

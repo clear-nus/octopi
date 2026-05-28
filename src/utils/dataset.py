@@ -40,8 +40,12 @@ def get_frames(frames_path, image_processor, transforms_image, max_length=5, ski
     
 
 class CLIPPropertyUniqueDataset(Dataset):
-    def __init__(self, image_processor, data_path, split_name, flip_p=0, max_frames=5):
+    def __init__(self, image_processor, data_path, split_name, flip_p=0, max_frames=5,
+                 rotation_degrees=0, color_jitter=0.0, gaussian_blur=False):
         super().__init__()
+        self.rotation_degrees = rotation_degrees
+        self.color_jitter = color_jitter
+        self.gaussian_blur = gaussian_blur
         self.split_name = split_name
         self.flip_p = flip_p
         self.max_frames = max_frames
@@ -101,6 +105,15 @@ class CLIPPropertyUniqueDataset(Dataset):
                 transform_list.append(transforms.RandomHorizontalFlip(1))
             if random.random() < self.flip_p:
                 transform_list.append(transforms.RandomVerticalFlip(1))
+            if self.rotation_degrees > 0:
+                transform_list.append(transforms.RandomRotation(self.rotation_degrees))
+            if self.color_jitter > 0:
+                transform_list.append(transforms.ColorJitter(
+                    brightness=self.color_jitter, contrast=self.color_jitter,
+                    saturation=self.color_jitter * 0.5, hue=0.0
+                ))
+            if self.gaussian_blur and random.random() < 0.2:
+                transform_list.append(transforms.GaussianBlur(kernel_size=5, sigma=(0.5, 1.5)))
             transforms_image = transforms.Compose(transform_list)
         else:
             transforms_image = None
@@ -109,8 +122,12 @@ class CLIPPropertyUniqueDataset(Dataset):
 
 
 class TactileLLMDataset(Dataset):
-    def __init__(self, image_processor, files, split_name, tokenizer, flip_p, random_frames=False, max_frames=5):
+    def __init__(self, image_processor, files, split_name, tokenizer, flip_p, random_frames=False, max_frames=5,
+                 rotation_degrees=0, color_jitter=0.0, gaussian_blur=False):
         super().__init__()
+        self.rotation_degrees = rotation_degrees
+        self.color_jitter = color_jitter
+        self.gaussian_blur = gaussian_blur
         self.split_name = split_name
         self.tokenizer = tokenizer
         self.bos_token = tokenizer.bos_token
@@ -142,6 +159,15 @@ class TactileLLMDataset(Dataset):
                 transform_list.append(transforms.RandomHorizontalFlip(1))
             if random.random() < self.flip_p:
                 transform_list.append(transforms.RandomVerticalFlip(1))
+            if self.rotation_degrees > 0:
+                transform_list.append(transforms.RandomRotation(self.rotation_degrees))
+            if self.color_jitter > 0:
+                transform_list.append(transforms.ColorJitter(
+                    brightness=self.color_jitter, contrast=self.color_jitter,
+                    saturation=self.color_jitter * 0.5, hue=0.0
+                ))
+            if self.gaussian_blur and random.random() < 0.2:
+                transform_list.append(transforms.GaussianBlur(kernel_size=5, sigma=(0.5, 1.5)))
             transforms_image = transforms.Compose(transform_list)
         else:
             transforms_image = None
@@ -176,6 +202,12 @@ class TactileLLMDataset(Dataset):
         answer = "".join(sample[-1]["content"])
         # 2) get tokens
         answer_tokens = torch.tensor(self.tokenizer.encode(answer + f'{self.eos_token}'), dtype=torch.int64)[1:]
+        # Compute where "Conclusion: " starts in answer_tokens (0 if absent, e.g. OPD)
+        conclusion_start = 0
+        if "Conclusion: " in answer:
+            desc_part = answer[:answer.index("Conclusion: ")]
+            # encode() includes BOS; [1:] mirrors the [1:] slice on answer_tokens
+            conclusion_start = max(0, len(self.tokenizer.encode(desc_part)) - 1)
         # 3) get frame tensors
         all_tactile_frames = []
         all_indices = []
@@ -186,4 +218,4 @@ class TactileLLMDataset(Dataset):
                 frames, indices = get_frames(t, self.image_processor, transforms_image, max_length=self.max_frames, return_indices=True)
             all_tactile_frames.append(frames)
             all_indices.append(indices)
-        return question, answer_tokens, all_tactile_frames, tactile, question_type, question_step, all_indices
+        return question, answer_tokens, all_tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start

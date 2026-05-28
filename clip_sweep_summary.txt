@@ -1,0 +1,8 @@
+[sweep] rot0 :: val_mean=0.6956521739130435 test_combined=0.2631578947368421
+[sweep] rot15 :: val_mean=0.6521739130434783 test_combined=0.18421052631578946
+[sweep] rot20 :: val_mean=0.5797101449275363 test_combined=0.4473684210526316
+[sweep] Phase A winner: rotation_degrees=0 (val_mean=0.6956521739130435)
+[sweep] rot0_w0.5_m0.3 :: val_mean=0.7053140096618358 test_combined=0.2631578947368421
+[sweep] rot0_w0.5_m0.5 :: val_mean=0.6859903381642513 test_combined=0.3157894736842105
+[sweep] rot0_w0.25_m1.0 :: val_mean=0.6956521739130435 test_combined=0.23684210526315788
+[sweep] rot0_w1.0_m1.0 :: val_mean=0.6666666666666666 test_combined=0.2631578947368421
