@@ -42,6 +42,8 @@ All LLM training runs on a single GPU (`cuda:6`, 35 GiB) using `torch_dtype=torc
 
 ## Changes from Original Octopi Paper
 
+Only count a change as contradicting the original Octopi paper when it changes methodology the paper described in detail. If the paper left an implementation choice unspecified, document it as an engineering default, ablation, or reproducibility note rather than a paper-method deviation.
+
 These are deviations from the original paper's methodology. Each is marked with whether it is currently active.
 
 ### CLIP Encoder
@@ -56,6 +58,10 @@ These are deviations from the original paper's methodology. Each is marked with 
 | `max_frames` kept at 8 (paper setting); earlier regression to 5 was unintentional | **Active** | `configs/train_clip_config.yaml` |
 | Data augmentation config keys added (rotation, ColorJitter, GaussianBlur) | **Disabled** (all set to 0/false) — hurt GelSight color-encoded force features | `src/utils/dataset.py`, configs |
 | `unfreeze_last_n_layers` config key added | **Disabled** (set to 0) | `src/train_clip.py` |
+| Class-balanced (continuous imbalance-scaled) loss, gated by `class_balanced_loss` | **Gated, default OFF** — best k-fold test gain when combined with EMA; see investigation section | `src/train_clip.py` |
+| EMA weight averaging over VPT + finetune + classifier params, gated by `ema_decay` | **Gated, default 0 (OFF)** — decay 0.98 tuned for the ~135-step regime; val evaluated on shadow weights | `src/train_clip.py` |
+| Decoupled classifier heads, gated by `decoupled_heads` | **Gated, default OFF** — intended to reduce cross-property interference from class-balanced weighting | `src/utils/model.py`, `src/train_clip.py` |
+| SWA-style tail weight averaging, gated by `swa` | **Gated, default OFF** — end-of-epoch averaging starts at `swa_start_epoch`; no cyclic LR or BN recalibration | `src/train_clip.py` |
 
 ### LLM Training (Stages 1–3)
 
@@ -114,8 +120,16 @@ Tried averaging CLS/patch means from layers `[-2, -6, -12]`. Did not improve ove
 ### ✅ CLIP — Pairwise Ranking Loss (IMPLEMENTED)
 `train_clip.py` adds a margin ranking loss on top of CE. For each pair (i, j) where label_i > label_j, penalises if predicted expected-rank score_i <= score_j + margin. Weight controlled by `ranking_loss_weight` (currently 0.5). Does not replace CE loss.
 
-### ✅ CLIP — Val Combined Save Criterion (IMPLEMENTED)
-Checkpoint saved when val combined accuracy (all 3 properties simultaneously correct) improves. Prevents gaming by a single-property spike.
+### ✅ CLIP — Val Mean Save Criterion (IMPLEMENTED)
+Checkpoint saved when mean per-property val accuracy improves. Combined accuracy is too coarse on the small val split and can move in large steps.
+
+### ✅ CLIP — EMA Weight Averaging (IMPLEMENTED, gated; default OFF)
+`EMA` class in `train_clip.py` maintains shadow weights over VPT + finetune + classifier params (`shadow = decay·shadow + (1−decay)·weights`), gated by config key `ema_decay` (default `0.0` = off). On each val pass `ema.apply_shadow()` swaps in the averaged weights for evaluation/checkpointing and `ema.restore()` swaps back. **`decay=0.98`** is deliberately low: the run is only ~135 optimizer steps, so the textbook 0.999 (half-life ~700 steps) would never warm up; 0.98 gives a ~34-step (~4-epoch) half-life. Aimed at the seed-to-seed *training-stability* problem on v1 (no SupCon, see investigation section), not at raising peak val. K-fold note below.
+
+### ✅ CLIP — Decoupled Heads + SWA (IMPLEMENTED, gated; default OFF)
+`CLIPClassifier` can use separate narrow MLP trunks per property via `decoupled_heads: true` and `decoupled_head_dim` (default 128). This keeps shared representation learning upstream in ViFiCLIP but avoids a shared classifier trunk where class-balanced weighting for hardness/texture can perturb roughness.
+
+`SWA` in `train_clip.py` averages end-of-epoch parameter snapshots over VPT + finetune + classifier params starting at `swa_start_epoch` (default 10 for the 15-epoch CLIP run). It reuses the existing cosine LR schedule and has no BatchNorm stat update because the model uses LayerNorm. If both EMA and SWA are enabled, SWA is used for validation/checkpoint weights.
 
 ### TTA
 `tta_passes` is set to `1` (disabled). TTA adds 3× test-time compute for marginal gains on this dataset. Re-enable only for final paper numbers.
@@ -146,19 +160,38 @@ K-fold results (FOLD_SEED=0, config A = rot=0, ranking_w=0.5, ranking_m=0.3), po
 |---------|----------|---------------|----------------|--------------|-----------|---------------|
 | baseline (no weighting) | 0.663±0.063 | 0.632 | 0.611 | 0.679 | 0.641 | 0.279±0.131 |
 | full inverse-freq (`cb`) | 0.668±0.074 | 0.779 | 0.568 | 0.689 | 0.679 | 0.363±0.101 |
-| continuous scaled (`cbs`) | **run in progress (2026-05-28)** | — | — | — | — | — |
+| continuous scaled + shared heads, no SWA (`cbs_shared_noswa`) | 0.668±0.069 | — | — | — | 0.665±0.052 | 0.337±0.086 |
+| continuous scaled + decoupled heads, no SWA (`cbs_decoupled_noswa`) | 0.666±0.067 | — | — | — | 0.730±0.029 | 0.447±0.064 |
+| full inverse + decoupled heads, no SWA (`cb_decoupled_noswa`) | 0.659±0.064 | — | — | — | 0.698±0.047 | 0.389±0.106 |
+| decoupled heads + SWA + continuous scaled (`decoupled_swa_cbs`) | 0.665±0.066 | — | — | — | 0.732±0.031 | 0.447±0.081 |
 
-Full weighting: +0.15 hardness (hard-class recall 0.59→0.87), texture rare-class recall 0.24→0.64, but −0.04 roughness. Scaled variant aims to keep hardness/texture gains without the roughness regression — pending.
+Full weighting: +0.15 hardness (hard-class recall 0.59→0.87), texture rare-class recall 0.24→0.64, but −0.04 roughness. The 2026-05-29 deconfounding runs suggest decoupled heads, not SWA, produce most of the test_mean gain: scaled shared/no-SWA test_mean `0.665`, scaled decoupled/no-SWA `0.730`, scaled decoupled/SWA `0.732`. SWA may still smooth training, but its marginal k-fold effect here is tiny. None of these clearly beat full inverse/shared on the fair selector (`val_mean` about `0.665-0.668`), so select by validation and treat test gains as diagnostic.
 
-NOTE: working config currently has `class_balanced_loss: true` from the in-progress run. Flip back to `false` once the scaled result is settled, per the paper-change policy.
+NOTE: checked-in/default config should keep `class_balanced_loss: false`; enable it only for explicit ablations or reproduction runs.
 
 ### Sweeps run (single-seed, low confidence — all within noise)
 Rotation ∈ {0,15,20} and ranking (weight,margin) grids: no config beat baseline on val outside noise; rot=0 nominally won val_mean. `rotation_degrees` aug did not help. The apparent "rot=20 wins test" was a combined-metric / data-shuffle artifact, not reproducible.
 
+### CLIP — No-Flip K-Fold Ablation (2026-05-28)
+Ran `EXP_TAG=noflip bash scripts/run_clip_kfold.sh` with `flip_p=0`, `ema_decay=0.0`, and `class_balanced_loss=false`. Result: `val_mean=0.662±0.055`, `test_mean=0.640±0.054`, `test_combined=0.289±0.119` over 5 folds. This matched the prior plain baseline test mean (~0.641) and did not justify changing the default, so `flip_p` remains `0.5`. Treat this as an augmentation ablation, not a paper-method contradiction unless the paper explicitly specified flip augmentation.
+
+### CLIP — Decoupled Heads + SWA + Scaled Class Balance K-Fold (2026-05-28)
+Ran `EXP_TAG=decoupled_swa_cbs bash scripts/run_clip_kfold.sh` with `decoupled_heads=true`, `swa=true`, `swa_start_epoch=10`, `class_balanced_loss=true`, `ema_decay=0.0`, and `flip_p=0.5`. Result: `val_mean=0.665±0.066`, `test_mean=0.732±0.031`, `test_combined=0.447±0.081` over 5 folds. Per-fold val means: `[0.6228, 0.5726, 0.6854, 0.7176, 0.7277]`. Per-fold test means: `[0.7456, 0.7632, 0.7456, 0.7193, 0.6842]`. This is test-promising but should not replace the selected config unless chosen by validation, since full inverse-frequency weighting remains slightly higher on `val_mean` (`0.668±0.074`).
+
+### CLIP — Weight/Head/SWA Deconfounding K-Folds (2026-05-29)
+Ran `bash scripts/queue_weight_head_swa_ablations.sh` with `DELETE_VIFICLIP=1` behavior inside `scripts/run_clip_kfold.sh`, so each fold's `vificlip.pt` was deleted after `val_mean`, `test_mean`, and `test_combined` were parsed. Results: `cbs_shared_noswa` `val_mean=0.668±0.069`, `test_mean=0.665±0.052`, `test_combined=0.337±0.086`; `cbs_decoupled_noswa` `val_mean=0.666±0.067`, `test_mean=0.730±0.029`, `test_combined=0.447±0.064`; `cb_decoupled_noswa` `val_mean=0.659±0.064`, `test_mean=0.698±0.047`, `test_combined=0.389±0.106`. Takeaway: with scaled weights, decoupling heads is the main test_mean jump (`0.665` → `0.730`); SWA adds almost nothing on top (`0.730` → `0.732`). Full inverse + decoupled heads underperforms scaled + decoupled heads on both val and test.
+
+### CLIP — Ablation Planning From Current Evidence (2026-05-29)
+Use k-fold `val_mean` as the selector and test metrics as diagnostics. Relative to the plain baseline (`val_mean=0.663`, `test_mean=0.641`, `test_combined=0.279`), the changes that helped both validation and diagnostic test metrics were class-balanced CE variants: full inverse shared heads (`0.668`, `0.679`, `0.363`), scaled shared heads (`0.668`, `0.665`, `0.337`), scaled decoupled heads without SWA (`0.666`, `0.730`, `0.447`), scaled decoupled heads with SWA (`0.665`, `0.732`, `0.447`), and paper-revert scaled CE + decoupled heads without ranking (`0.667`, `0.707`, `0.384`). Ranking loss did not earn priority because it lowered the selector (`val_mean=0.662`) despite slightly better test diagnostics.
+
+For paper-closeness, run ablations in this order: finish CE-only paper-LR controls first (`paper_lr_pure_ce`, then `paper_lr_smooth01` if queued); then run paper-ish params + scaled class-balanced CE + **shared heads** + no ranking + no EMA/SWA with `DELETE_VIFICLIP=1`; only then consider decoupled heads, because that is a larger architecture divergence even though test metrics are strongest.
+
 ### Tooling added (all CLIP-eval helpers)
 - `scripts/run_clip_sweep.sh` — two-phase rotation then ranking sweep; backs up/restores config via trap.
 - `scripts/run_clip_seed_reps.sh` — 3-seed × 2-config reproducibility check.
-- `scripts/run_clip_kfold.sh` — K-fold CV (`K`, `FOLD_SEED`, `EXP_TAG` env vars). Backs up and restores both `configs/train_clip_config.yaml` and `src/utils/constants.py` via EXIT trap. Reports val_mean / test_mean / test_combined mean±std. **Do not edit this script while a run is in progress** (bash byte-offset corruption).
+- `scripts/run_clip_kfold.sh` — K-fold CV (`K`, `FOLD_SEED`, `EXP_TAG` env vars). Backs up and restores both `configs/train_clip_config.yaml` and `src/utils/constants.py` via EXIT trap. Uses a run-specific processed data directory (`data/kfold_<seed><tag>`) so concurrent/queued runs do not delete global `data/` mid-training. Reports val_mean / test_mean / test_combined mean±std. **Do not edit this script while a run is in progress** (bash byte-offset corruption).
+- `scripts/queue_noflip_kfold.sh` — waits for an optional prior PID, runs the no-flip baseline k-fold, then restores `flip_p=0.5`.
+- `scripts/queue_decoupled_swa_kfold.sh` — runs the gated `decoupled_heads + swa + class_balanced_loss` k-fold ablation and restores all gates/defaults afterward.
 - `scripts/_build_kfold.py` — stratified (by hardness) fold builder over `TRAIN_OBJECTS ∪ VAL_OBJECTS`; writes `scripts/kfold/fold_<i>.json`. Never touches `TEST_OBJECTS`.
 - `scripts/_patch_constants.py` — rewrites only the `TRAIN_OBJECTS`/`VAL_OBJECTS` list literals in `constants.py` from a fold JSON.
 - `src/utils/parse_clip_log.py` — extracts best-val-epoch metrics from a run `log.txt` (incl. `val_mean`, `test_mean`, `test_combined`).

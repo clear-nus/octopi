@@ -24,12 +24,14 @@ conda activate octopi
 K="${K:-5}"
 FOLD_SEED="${FOLD_SEED:-0}"
 EXP_TAG="${EXP_TAG:-}"   # optional suffix to keep checkpoint dirs distinct across configs
+DELETE_VIFICLIP="${DELETE_VIFICLIP:-0}"  # set to 1 to remove each fold's large vificlip.pt after parsing metrics
 CONFIG="configs/train_clip_config.yaml"
 CONSTANTS="src/utils/constants.py"
 CONFIG_BAK="${CONFIG}.kfold_bak"
 CONSTANTS_BAK="${CONSTANTS}.kfold_bak"
 DATASET_PATH="dataset"
-DATA_DIR="data"
+DATA_ROOT="data"
+DATA_DIR="${DATA_ROOT}/kfold_${FOLD_SEED}${EXP_TAG:-base}"
 SUMMARY="clip_kfold_summary.txt"
 
 cp "$CONFIG" "$CONFIG_BAK"
@@ -47,9 +49,14 @@ echo "fold,val_mean,test_mean,test_combined" > "${SUMMARY}.csv"
 # 1. Build folds.
 python scripts/_build_kfold.py --k "$K" --seed "$FOLD_SEED"
 
+latest_exp_dir() {
+  local exp_id="$1"
+  find exps -maxdepth 1 -type d -name "*_${exp_id}" | sort | tail -1
+}
+
 latest_log_field() {
   local exp_id="$1" field="$2" dir
-  dir=$(find exps -maxdepth 1 -type d -name "*_${exp_id}" | sort | tail -1)
+  dir=$(latest_exp_dir "$exp_id")
   if [ -z "$dir" ] || [ ! -f "$dir/log.txt" ]; then
     echo "ERROR: no log for ${exp_id}" >&2
     return 1
@@ -68,6 +75,7 @@ for ((i=0; i<K; i++)); do
 
   # 3. Regen data/ for this split.
   rm -rf "$DATA_DIR"
+  mkdir -p "$DATA_ROOT"
   python src/utils/process_dataset.py --dataset_path "$DATASET_PATH" \
       --output_path "$DATA_DIR" --seed 0
   python src/utils/generate_qa.py --data_path "$DATA_DIR" --seed 0
@@ -84,6 +92,13 @@ for ((i=0; i<K; i++)); do
   t=$(latest_log_field "$EXP_ID" test_combined)
   echo "[kfold] fold $i :: val_mean=$v test_mean=$tm test_combined=$t" | tee -a "$SUMMARY"
   echo "${i},${v},${tm},${t}" >> "${SUMMARY}.csv"
+  if [ "$DELETE_VIFICLIP" = "1" ]; then
+    exp_dir=$(latest_exp_dir "$EXP_ID")
+    if [ -n "$exp_dir" ] && [ -f "$exp_dir/vificlip.pt" ]; then
+      rm -f "$exp_dir/vificlip.pt"
+      echo "[kfold] deleted $exp_dir/vificlip.pt"
+    fi
+  fi
 done
 
 echo "================================================================"

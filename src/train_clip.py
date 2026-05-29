@@ -40,15 +40,16 @@ def ordinal_loss(logits, labels, n_classes=3, smoothing=0.1, weight=None):
     return F.cross_entropy(logits, labels, weight=weight)
 
 
-def compute_class_weights(objects, n_classes=3, device="cpu"):
-    """Per-class weights with strength scaled by each property's train imbalance.
+def compute_class_weights(objects, n_classes=3, device="cpu", mode="scaled"):
+    """Per-class weights computed from train objects only.
 
-    Interpolates between uniform (balanced property) and mean-1 inverse-frequency
-    (skewed property) using alpha = 1 - 1/ratio, where ratio = max/min class count.
-    No threshold to tune; balanced properties (e.g. roughness) stay ~uniform on their
-    own, which also limits shared-trunk interference with the skewed heads.
+    mode="full" returns mean-1 inverse-frequency weights. mode="scaled" interpolates
+    between uniform and inverse-frequency using alpha = 1 - 1/ratio, so balanced
+    properties stay close to uniform.
     """
     from collections import Counter
+    if mode not in {"scaled", "full"}:
+        raise ValueError(f"Unknown class_balance_mode: {mode}")
     weights = {}
     for prop in ["hardness", "roughness", "texture"]:
         counts = Counter(RANKS[prop][o] for o in objects)
@@ -59,10 +60,13 @@ def compute_class_weights(objects, n_classes=3, device="cpu"):
             dtype=torch.float32, device=device,
         )
         inv = inv / inv.mean()
-        ratio = max(counts.values()) / max(min(counts.values()), 1)
-        alpha = 1.0 - 1.0 / ratio
-        w = (1.0 - alpha) * torch.ones_like(inv) + alpha * inv
-        weights[prop] = w / w.mean()
+        if mode == "full":
+            weights[prop] = inv
+        else:
+            ratio = max(counts.values()) / max(min(counts.values()), 1)
+            alpha = 1.0 - 1.0 / ratio
+            w = (1.0 - alpha) * torch.ones_like(inv) + alpha * inv
+            weights[prop] = w / w.mean()
     return weights
 
 
@@ -88,6 +92,45 @@ class EMA:
         with torch.no_grad():
             for s, p in zip(self.shadow, self.params):
                 p.copy_(s)
+
+    def restore(self):
+        with torch.no_grad():
+            for b, p in zip(self.backup, self.params):
+                p.copy_(b)
+        self.backup = None
+
+
+class SWA:
+    """Equal-weight average of end-of-epoch weight snapshots (SWA-style tail averaging).
+
+    Averaging starts at start_epoch; update() is called once per epoch. apply_shadow()/
+    restore() swap the running average in for eval/checkpoint, matching EMA's interface.
+    LR is left to the existing cosine scheduler (no cyclic-LR phase), so this is tail
+    weight-averaging rather than full SWA. The model has no BatchNorm (CLIP uses
+    LayerNorm), so no running-stat recalibration is needed on the averaged weights.
+    """
+    def __init__(self, params, start_epoch):
+        self.params = list(params)
+        self.start_epoch = start_epoch
+        self.avg = [p.detach().clone() for p in self.params]
+        self.n = 0
+        self.backup = None
+
+    def update(self):
+        self.n += 1
+        with torch.no_grad():
+            if self.n == 1:
+                for a, p in zip(self.avg, self.params):
+                    a.copy_(p.detach())
+            else:
+                for a, p in zip(self.avg, self.params):
+                    a.add_(p.detach() - a, alpha=1.0 / self.n)
+
+    def apply_shadow(self):
+        self.backup = [p.detach().clone() for p in self.params]
+        with torch.no_grad():
+            for a, p in zip(self.avg, self.params):
+                p.copy_(a)
 
     def restore(self):
         with torch.no_grad():
@@ -135,7 +178,7 @@ def main(configs, exp_name, g, device):
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g)
     # models
     encoder = CLIPTactileEncoder(clip_model=configs["use_clip"]).to(device)
-    classifier = CLIPClassifier(output_size=configs["output_size"]).to(device)
+    classifier = CLIPClassifier(output_size=configs["output_size"], decoupled_heads=configs.get("decoupled_heads", False), decoupled_head_dim=configs.get("decoupled_head_dim", 128)).to(device)
     if configs["prompt_learning"]:
         clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
     else:
@@ -165,8 +208,9 @@ def main(configs, exp_name, g, device):
     smoothing = configs.get("label_smoothing", 0.1)
     class_weights = {"hardness": None, "roughness": None, "texture": None}
     if configs.get("class_balanced_loss", False):
-        class_weights = compute_class_weights(train_dataset.objects, device=device)
-        print(f"Class-balanced loss ON. Weights: "
+        class_balance_mode = configs.get("class_balance_mode", "scaled")
+        class_weights = compute_class_weights(train_dataset.objects, device=device, mode=class_balance_mode)
+        print(f"Class-balanced loss ON (mode={class_balance_mode}). Weights: "
               f"{ {k: [round(x, 3) for x in v.tolist()] for k, v in class_weights.items()} }")
     vpt_params = [p for n, p in vificlip.named_parameters() if "VPT" in n and p.requires_grad]
     finetune_params = [p for n, p in vificlip.named_parameters() if "VPT" not in n and p.requires_grad]
@@ -191,6 +235,14 @@ def main(configs, exp_name, g, device):
         ema_params = vpt_params + finetune_params + list(classifier.parameters())
         ema = EMA(ema_params, ema_decay)
         print(f"EMA ON (decay={ema_decay}) over {len(ema_params)} param tensors")
+    swa = None
+    if configs.get("swa", False):
+        swa_start_epoch = int(configs.get("swa_start_epoch", max(0, configs["num_epochs"] - 5)))
+        swa_params = vpt_params + finetune_params + list(classifier.parameters())
+        swa = SWA(swa_params, swa_start_epoch)
+        print(f"SWA ON (start_epoch={swa_start_epoch}) over {len(swa_params)} param tensors")
+        if ema is not None:
+            print("WARNING: both EMA and SWA enabled; SWA takes precedence for eval/checkpoint.")
     best_val_acc = -1
     epochs = configs["num_epochs"]
     for epoch in tqdm.tqdm(range(epochs)):
@@ -239,9 +291,17 @@ def main(configs, exp_name, g, device):
             combined_preds = torch.stack([ordinal_predict(hardness_preds), ordinal_predict(roughness_preds), ordinal_predict(texture_preds)], dim=-1)
             combined_labels = torch.cat([torch.unsqueeze(hardness_labels, dim=-1), torch.unsqueeze(roughness_labels, dim=-1), torch.unsqueeze(texture_labels, dim=-1)], dim=-1)
             total_train_combined_correct += np.sum(np.all(combined_preds.cpu().detach().numpy() == combined_labels.cpu().detach().numpy(), axis=-1))
-        # validation (on EMA weights when enabled, so checkpoints reflect the average)
-        if ema is not None:
-            ema.apply_shadow()
+        # end-of-epoch SWA snapshot (no-op until swa_start_epoch)
+        if swa is not None and epoch >= swa.start_epoch:
+            swa.update()
+        # validation runs on the averaged weights when enabled (SWA takes precedence over
+        # EMA), so checkpoints reflect the lower-variance average
+        if swa is not None:
+            avg = swa if swa.n > 0 else None
+        else:
+            avg = ema
+        if avg is not None:
+            avg.apply_shadow()
         vificlip.eval()
         classifier.eval()
         # total_val_correct = 0
@@ -297,8 +357,8 @@ def main(configs, exp_name, g, device):
             torch.save(encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
             torch.save(classifier.state_dict(), f"{configs['exps_path']}/{exp_name}/classifier.pt")
             torch.save(vificlip.state_dict(), f"{configs['exps_path']}/{exp_name}/vificlip.pt")
-        if ema is not None:
-            ema.restore()
+        if avg is not None:
+            avg.restore()
 
 
 if __name__ == "__main__":

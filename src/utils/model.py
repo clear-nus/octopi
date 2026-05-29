@@ -22,16 +22,35 @@ class CLIPTactileEncoder(nn.Module):
     
 
 class CLIPClassifier(nn.Module):
-    def __init__(self, output_size):
+    def __init__(self, output_size, decoupled_heads=False, decoupled_head_dim=128):
         super(CLIPClassifier, self).__init__()
-        self.fc = nn.Linear(output_size, 512)
-        self.act = nn.ReLU()
-        self.dropout = nn.Dropout(0.5)
-        self.hardness_fc = nn.Linear(512, 3)
-        self.roughness_fc = nn.Linear(512, 3)
-        self.texture_fc = nn.Linear(512, 3)
+        self.decoupled_heads = decoupled_heads
+        if decoupled_heads:
+            # Each property gets its own trunk so class-balanced reweighting on one
+            # head no longer perturbs the others through a shared fc layer. Width is
+            # kept narrow (default 128) so total params stay at/below the shared trunk;
+            # shared-feature learning still happens in the (shared) upstream encoder.
+            head_in = decoupled_head_dim
+            def _trunk():
+                return nn.Sequential(nn.Linear(output_size, head_in), nn.Dropout(0.5), nn.ReLU())
+            self.hardness_trunk = _trunk()
+            self.roughness_trunk = _trunk()
+            self.texture_trunk = _trunk()
+        else:
+            head_in = 512
+            self.fc = nn.Linear(output_size, head_in)
+            self.act = nn.ReLU()
+            self.dropout = nn.Dropout(0.5)
+        self.hardness_fc = nn.Linear(head_in, 3)
+        self.roughness_fc = nn.Linear(head_in, 3)
+        self.texture_fc = nn.Linear(head_in, 3)
 
     def forward(self, vision_features):
+        if self.decoupled_heads:
+            hardness_preds = self.hardness_fc(self.hardness_trunk(vision_features))
+            roughness_preds = self.roughness_fc(self.roughness_trunk(vision_features))
+            texture_preds = self.texture_fc(self.texture_trunk(vision_features))
+            return hardness_preds, roughness_preds, texture_preds
         vision_features = self.act(self.dropout(self.fc(vision_features)))
         hardness_preds = self.hardness_fc(vision_features)
         roughness_preds = self.roughness_fc(vision_features)
