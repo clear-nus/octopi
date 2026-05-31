@@ -40,7 +40,7 @@ def ordinal_loss(logits, labels, n_classes=3, smoothing=0.1, weight=None):
     return F.cross_entropy(logits, labels, weight=weight)
 
 
-def compute_class_weights(objects, n_classes=3, device="cpu", mode="scaled"):
+def compute_class_weights(objects, n_classes=3, device="cpu", mode="scaled", strength=1.0, properties=None):
     """Per-class weights computed from train objects only.
 
     mode="full" returns mean-1 inverse-frequency weights. mode="scaled" interpolates
@@ -50,8 +50,16 @@ def compute_class_weights(objects, n_classes=3, device="cpu", mode="scaled"):
     from collections import Counter
     if mode not in {"scaled", "full"}:
         raise ValueError(f"Unknown class_balance_mode: {mode}")
+    if not 0.0 <= strength <= 1.0:
+        raise ValueError(f"class_balance_strength must be in [0, 1], got {strength}")
+    if properties is None:
+        properties = ["hardness", "roughness", "texture"]
+    properties = set(properties)
     weights = {}
     for prop in ["hardness", "roughness", "texture"]:
+        if prop not in properties:
+            weights[prop] = None
+            continue
         counts = Counter(RANKS[prop][o] for o in objects)
         counts = {c: counts.get(c, 0) for c in range(n_classes)}
         total = sum(counts.values())
@@ -61,12 +69,14 @@ def compute_class_weights(objects, n_classes=3, device="cpu", mode="scaled"):
         )
         inv = inv / inv.mean()
         if mode == "full":
-            weights[prop] = inv
+            target = inv
         else:
             ratio = max(counts.values()) / max(min(counts.values()), 1)
             alpha = 1.0 - 1.0 / ratio
-            w = (1.0 - alpha) * torch.ones_like(inv) + alpha * inv
-            weights[prop] = w / w.mean()
+            target = (1.0 - alpha) * torch.ones_like(inv) + alpha * inv
+            target = target / target.mean()
+        w = (1.0 - strength) * torch.ones_like(inv) + strength * target
+        weights[prop] = w / w.mean()
     return weights
 
 
@@ -209,9 +219,21 @@ def main(configs, exp_name, g, device):
     class_weights = {"hardness": None, "roughness": None, "texture": None}
     if configs.get("class_balanced_loss", False):
         class_balance_mode = configs.get("class_balance_mode", "scaled")
-        class_weights = compute_class_weights(train_dataset.objects, device=device, mode=class_balance_mode)
-        print(f"Class-balanced loss ON (mode={class_balance_mode}). Weights: "
-              f"{ {k: [round(x, 3) for x in v.tolist()] for k, v in class_weights.items()} }")
+        class_balance_strength = configs.get("class_balance_strength", 1.0)
+        class_balance_properties = configs.get("class_balance_properties", ["hardness", "roughness", "texture"])
+        class_weights = compute_class_weights(
+            train_dataset.objects,
+            device=device,
+            mode=class_balance_mode,
+            strength=class_balance_strength,
+            properties=class_balance_properties,
+        )
+        printable_weights = {
+            k: None if v is None else [round(x, 3) for x in v.tolist()]
+            for k, v in class_weights.items()
+        }
+        print(f"Class-balanced loss ON (mode={class_balance_mode}, strength={class_balance_strength}, properties={class_balance_properties}). Weights: "
+              f"{printable_weights}")
     vpt_params = [p for n, p in vificlip.named_parameters() if "VPT" in n and p.requires_grad]
     finetune_params = [p for n, p in vificlip.named_parameters() if "VPT" not in n and p.requires_grad]
     optimizer_clip_groups = [{"params": vpt_params, "lr": configs["lr"]}]
