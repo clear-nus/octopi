@@ -1,13 +1,13 @@
-data_dir: data/kfold_0base_paperish
+data_dir: data
 cuda: 6
-seed: 0
+seed: 2
 exps_path: exps
 flip_p: 0.5
 rotation_degrees: 0
 color_jitter: 0.0
 gaussian_blur: false
 use_clip: openai/clip-vit-large-patch14
-num_epochs: 15
+num_epochs: 30
 lr: 0.0003
 classifier_lr: 0.0003
 warmup_ratio: 0.2
@@ -16,7 +16,7 @@ gradient_accumulation_steps: 4
 output_size: 1024
 prompt_learning: true
 label_smoothing: 0.1
-max_frames: 8
+max_frames: 5
 unfreeze_last_n_layers: 0
 finetune_lr: 1.0e-05
 num_context_vision: 8
@@ -25,15 +25,20 @@ dim_context_vision: 1024
 num_context_text: 6
 prompt_depth_text: 12
 dim_context_text: 768
-weight_decay: 0.05
-ranking_loss_weight: 0.5
+weight_decay: 0.0
+ranking_loss_weight: 0.0
 ranking_margin: 0.3
-class_balanced_loss: false
+class_balanced_loss: true
 class_balance_mode: scaled
 fusion_layers:
 - -2
-ema_decay: 0.0
-decoupled_heads: false
+ema_decay: 0.98
+decoupled_heads: true
 decoupled_head_dim: 128
 swa: false
 swa_start_epoch: 10
+class_balance_strength: 1.0
+class_balance_properties:
+- hardness
+- roughness
+- texture

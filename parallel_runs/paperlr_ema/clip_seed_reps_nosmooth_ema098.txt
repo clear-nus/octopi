@@ -1,0 +1,1 @@
+[seed-reps] seed=0 clip_seed_0_nosmooth_ema098 :: val_mean=0.5833333333333334 test_mean=0.7192982456140351 test_combined=0.42105263157894735

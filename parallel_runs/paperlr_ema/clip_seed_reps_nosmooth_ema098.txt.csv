@@ -1,0 +1,2 @@
+seed,exp_id,val_mean,test_mean,test_combined
+0,clip_seed_0_nosmooth_ema098,0.5833333333333334,0.7192982456140351,0.42105263157894735
