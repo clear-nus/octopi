@@ -1,5 +1,34 @@
 # Repository Guidelines
 
+## Current Experiment Decisions (2026-06-01)
+The current final CLIP -> LLM pipeline run is `octopi_llm_repro_sorted`, logging to `queue_llm_repro_sorted.log`. It uses deterministic preprocessing/order fixes, deterministic PyTorch/CUDA guards, and the locked paper-close CLIP config below.
+
+### Final CLIP Config
+- 30 epochs, 5 frames, horizontal/vertical flip `0.5`.
+- LR/classifier LR `3e-4`; no ranking loss, no weight decay, no label smoothing.
+- Scaled class-balanced CE enabled for hardness/roughness/texture.
+- EMA enabled with `ema_decay=0.98`.
+- Decoupled property heads enabled; treat as an implementation detail unless the paper explicitly specifies a shared classifier trunk.
+- Checkpoint selection uses validation mean per-property accuracy (`val_mean`), not validation combined accuracy.
+
+### Main Paper-Method Deviations To Disclose
+- Lower CLIP LR (`3e-4` instead of paper `1e-3`).
+- Scaled class-balanced CE.
+- EMA weight averaging.
+- CLIP checkpoint selection by `val_mean` instead of validation combined accuracy.
+
+### Reproducibility Fixes
+- `process_dataset.py` now sorts raw video and generated sample directory listings.
+- `CLIPPropertyUniqueDataset` now sorts JSON keys and per-object sample paths.
+- Training uses deterministic PyTorch/cuDNN guards, disables TF32, and sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` plus `PYTHONHASHSEED=0` in `run_llm_training.sh`.
+
+### Reporting Metrics
+- CLIP primary metric: `test_mean` = mean per-property test accuracy over hardness, roughness, and texture.
+- CLIP secondary metric: `test_combined` = all three properties correct on the same sample, kept for paper comparability.
+- LLM OPD metrics align with CLIP: report hardness/roughness/texture accuracies and their mean as primary; OPD combined accuracy is secondary and analogous to CLIP `test_combined`.
+- LLM overall reporting should include per-task accuracies for OPD, property comparison, property superlative selection, and property-object match. If one headline number is needed, use a macro-average over task-level accuracies and still show the per-task breakdown.
+- Never select checkpoints by test metrics, including `test_combined`.
+
 ## Project Structure & Module Organization
 `src/` contains the training and evaluation entry points: `train_clip.py`, `train_llm.py`, `test_two_step.py`, `evaluate_llm.py`, and `interact.py`. Shared dataset, model, and config helpers live in `src/utils/`. Configs are in `configs/`; reproducibility scripts are in `scripts/`. Raw GelSight `.mov` files live in `dataset/`, processed frame folders and QA JSON files are generated into `data/`, figures stay in `assets/`, and run outputs are written to `exps/<timestamp>_<exp_id>/`.
 
@@ -53,7 +82,7 @@ These are deviations from the original paper's methodology. Each is marked with 
 | Patch token mean pooling (`hidden_states[-2][:, 1:].mean()`) instead of CLS token | **Reverted** — CLS outperforms patch mean empirically (0.553 vs 0.421 peak test combined) | `src/utils/model.py` |
 | Multi-layer feature fusion over layers `[-2, -6, -12]` instead of a single layer | **Reverted to single layer** (`fusion_layers: [-2]`) — multi-layer did not improve over CLS single-layer baseline | `src/utils/model.py`, `src/train_clip.py` |
 | Pairwise ranking loss added on top of CE loss (`ranking_loss_weight: 0.5`) | **Implemented, but not recommended for the paper-close CLIP config** | `src/train_clip.py` |
-| Checkpoint selection by validation combined accuracy | **Active** — restored for final paper-aligned CLIP runs | `src/train_clip.py` |
+| Checkpoint selection by validation mean per-property accuracy (`val_mean`) instead of validation combined accuracy | **Active** — final reproducible CLIP/LLM run uses `val_mean` because `val_combined` is too coarse/noisy on the small val split | `src/train_clip.py` |
 | `num_epochs` reduced to 15 (paper: 30) | **Implemented, but not recommended for the paper-close CLIP config** — final paper-close ablations favor retaining 30 epochs | `configs/train_clip_config.yaml` |
 | `max_frames` set above 5 (paper: 5) | **Implemented, but not recommended for the paper-close CLIP config** — the Octopi paper samples/evaluates 5 frames | `configs/train_clip_config.yaml` |
 | Data augmentation config keys added (rotation, ColorJitter, GaussianBlur) | **Disabled** (all set to 0/false) — hurt GelSight color-encoded force features | `src/utils/dataset.py`, configs |
@@ -142,7 +171,7 @@ CLIP/LLM training must run in the `octopi` conda env (`/data/samson/miniconda3/e
 ### Evaluation methodology (important — read before trusting any CLIP metric)
 - **The fixed 7-object val split is noisy and slightly easy.** K-fold CV val_mean (0.66) runs ~7pp below the locked-split val_mean (0.73) for the same config. Hyperparameter deltas ≤0.05 on the locked val are inside the noise floor.
 - **`test_combined` (all-3-properties-correct) is a poor primary metric.** The test set is only 7 objects / ~38 samples, so combined moves in ~±0.14 steps and is a compounded statistic (≈ product of three ~0.6 per-property accuracies). Across k-folds, combined was *negatively* correlated with val_mean (r≈−0.77); per-property test tracked val within ~0.04. **Judge/report on mean per-property test accuracy; treat combined as secondary** (kept for paper comparability — confirm what the paper reports).
-- **Selection vs reporting:** select configs on **val** (k-fold val_mean), never test. Report final numbers on the held-out test set *once*, as per-property mean ± std over ~3 seeds on the canonical split. Keep k-fold (non-canonical val splits) as ablation evidence, separate from the headline test number.
+- **Selection vs reporting:** select configs/checkpoints on **validation mean per-property accuracy** (`val_mean`), never test. `val_combined` is paper-comparable but too coarse for stable checkpoint selection on ~36 val samples. Report final numbers on the held-out test set once, as mean per-property accuracy plus `test_combined` as a secondary/paper-comparability metric. Keep k-fold (non-canonical val splits) as ablation evidence, separate from the headline test number.
 
 ### Class-imbalance finding (root cause of weak hardness/roughness)
 Per-property confusion (pooled over 5 k-fold checkpoints, `src/test_property_confusion.py`) showed **minority-class collapse**: the classifier defaults to training-frequent classes. Train imbalance ratios (max/min class count, train-only — no leakage): hardness 3.0, texture 2.4, roughness 1.3.
@@ -294,17 +323,19 @@ Use this as the locked CLIP encoder config before LLM training:
 - `rotation_degrees=0`
 - `color_jitter=0.0`
 - `gaussian_blur=false`
-- checkpoint selection by validation combined accuracy (`val_combined`)
+- checkpoint selection by validation mean per-property accuracy (`val_mean`)
 
 Paper-method interpretation:
-- Paper-aligned: 30 epochs, 5 frames, no ranking loss, no weight decay, no label smoothing, validation-combined checkpoint selection.
-- Clear deviations to disclose: lower LR (`3e-4` instead of `1e-3`), scaled class-balanced CE, EMA.
+- Paper-aligned: 30 epochs, 5 frames, no ranking loss, no weight decay, no label smoothing.
+- Clear deviations to disclose: lower LR (`3e-4` instead of `1e-3`), scaled class-balanced CE, EMA, and validation mean per-property checkpoint selection instead of validation combined accuracy.
 - Implementation detail unless contradicted by paper/code: decoupled property heads.
 
-Canonical 5-seed result for this config, re-parsed with paper-style `val_combined` selection:
+Canonical 5-seed result for this config, re-parsed with paper-style `val_combined` selection before the final `val_mean` decision:
 - `test_mean=0.702±0.038`
 - `test_combined=0.426±0.068`
 - Per-seed `test_combined`: `[0.526, 0.421, 0.342, 0.395, 0.447]`.
+
+Final selection/reporting decision (2026-06-01): use `val_mean` for checkpoint selection because `val_combined` is a high-variance conjunctive metric on the small validation split. Report both `test_mean` and `test_combined`; never select by `test_combined`.
 
 LR probe with the same config except LR, 3 seeds each:
 - `lr=5e-4`: `val_combined` selection gave `test_mean=0.658±0.032`, `test_combined=0.342±0.070`.
