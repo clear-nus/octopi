@@ -1,1 +1,2 @@
 seed,exp_id,val_mean,test_mean,test_combined
+1,clip_seed_1_repro_sorted_valmean_ema098,0.638888888888889,0.631578947368421,0.3684210526315789

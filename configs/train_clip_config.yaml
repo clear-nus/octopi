@@ -1,6 +1,6 @@
-data_dir: data/clip_repro_sorted_seed_reps/seed_1
+data_dir: /tmp/octopi_clip_topk_remaining/seed_4
 cuda: 7
-seed: 1
+seed: 4
 exps_path: exps
 flip_p: 0.5
 rotation_degrees: 0
@@ -31,6 +31,7 @@ ranking_margin: 0.3
 class_balanced_loss: true
 class_balance_mode: scaled
 ema_decay: 0.98
+top_k_val_checkpoints: 3
 decoupled_heads: true
 decoupled_head_dim: 128
 swa: false

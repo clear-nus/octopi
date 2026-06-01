@@ -1,4 +1,4 @@
-data_dir: /tmp/octopi_llm_frames8_encoder_full_stage12_data
+data_dir: data
 gpu_config: configs/gpu_config_7b.json
 cuda: 6
 seed: 0
@@ -10,11 +10,11 @@ flip_p: 0.5
 rotation_degrees: 0
 color_jitter: 0.0
 gaussian_blur: false
-max_frames: 8
+max_frames: 5
 use_clip: openai/clip-vit-large-patch14
 freeze_encoder: true
 encoder_lr: 1.0e-05
-encoder_path: exps/2026_06_01_15_28_38_train_clip_clip_seed_0_repro_sorted_valmean_ema098_frames8_notopk/encoder.pt
+encoder_path: exps/2026_06_01_09_03_40_train_clip_clip_seed_0/encoder.pt
 encoder_output_size: 1024
 num_context_vision: 8
 prompt_depth_vision: 12
@@ -23,8 +23,8 @@ num_context_text: 4
 prompt_depth_text: 12
 dim_context_text: 768
 freeze_projection: false
-projection_lr: 0.0002
-projection_path: exps/2026_06_01_19_11_15_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_frames8enc_fullloss_stage1/best_project.pt
+projection_lr: 0.0001
+projection_path: exps/2026_06_01_11_25_46_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_conclusionfix/best_project.pt
 train_files:
 - /data/samson/octopi/data/train_qa.json
 val_files:
@@ -36,14 +36,14 @@ test_files:
 model_type: vicuna-7b
 cutoff_len: 512
 offload_dir: ./
-llm_lr: 0.0002
+llm_lr: 0.0001
 quantized: false
-tokenizer_path: exps/2026_06_01_19_11_15_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_frames8enc_fullloss_stage1/tokenizer
-llm_path: exps/2026_06_01_19_11_15_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_frames8enc_fullloss_stage1/best_llm_weights.pt
+tokenizer_path: exps/2026_06_01_11_25_46_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_conclusionfix/tokenizer
+llm_path: exps/2026_06_01_11_25_46_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_conclusionfix/best_llm_weights.pt
 lora_trained: false
 use_lora: true
-lora_alpha: 128
-r: 128
+lora_alpha: 32
+r: 32
 lora_dropout: 0.05
 target_modules:
 - q_proj
@@ -59,7 +59,7 @@ bias: none
 max_train_steps: 3000
 per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
-warmup_steps: 20
+warmup_steps: 50
 val_freq: 150
 val_subset_size: null
 tta_passes: 1

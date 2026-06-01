@@ -1,0 +1,9 @@
+[frames8-notopk] seed=0 clip_seed_0_repro_sorted_valmean_ema098_frames8_notopk :: val_mean=0.6481481481481481 test_mean=0.7017543859649124 test_combined=0.39473684210526316
+[frames8-notopk] seed=1 clip_seed_1_repro_sorted_valmean_ema098_frames8_notopk :: val_mean=0.638888888888889 test_mean=0.7105263157894738 test_combined=0.42105263157894735
+[frames8-notopk] seed=2 clip_seed_2_repro_sorted_valmean_ema098_frames8_notopk :: val_mean=0.6296296296296297 test_mean=0.6052631578947368 test_combined=0.3157894736842105
+[frames8-notopk] seed=3 clip_seed_3_repro_sorted_valmean_ema098_frames8_notopk :: val_mean=0.5555555555555556 test_mean=0.7192982456140351 test_combined=0.42105263157894735
+[frames8-notopk] seed=4 clip_seed_4_repro_sorted_valmean_ema098_frames8_notopk :: val_mean=0.6296296296296297 test_mean=0.7017543859649122 test_combined=0.42105263157894735
+[frames8-notopk] aggregate:
+  val_mean      = 0.620 +/- 0.037 (n=5)
+  test_mean     = 0.688 +/- 0.047 (n=5)
+  test_combined = 0.395 +/- 0.046 (n=5)

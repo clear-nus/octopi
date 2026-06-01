@@ -21,6 +21,17 @@ from transformers.utils import logging
 from evaluate_llm import LLMEvaluator, random_scores
 
 
+def write_llm_results(results, path):
+    with open(path, 'w') as f:
+        for task, stats in results.items():
+            f.write(f"{task}:\n")
+            for stat, value in stats.items():
+                if task in random_scores and stat in random_scores[task]:
+                    f.write(f"\t{stat}: {value} ({random_scores[task][stat]})\n")
+                else:
+                    f.write(f"\t{stat}: {value}\n")
+
+
 def add_new_tokens(llm, tokenizer, new_tokens):
     new_tokens = list(set(new_tokens) - set(tokenizer.vocab.keys()))
     if len(new_tokens) == 0:
@@ -61,7 +72,8 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
                 break
             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
             answer_tokens = answer_tokens.to(device)
-            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+            cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
             val_loss_total += outputs.loss.item()
             val_steps += 1
             # Generation dynamically removed to speed up validation since we save on loss
@@ -95,14 +107,21 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
             pass
     preds = []
     evaluator = LLMEvaluator()
+    exp_dir = f'{configs["exps_path"]}/{exp_name}'
+    partial_jsonl_path = f'{exp_dir}/{file_suffix}_partial_preds.jsonl'
+    partial_json_path = f'{exp_dir}/{file_suffix}_partial_preds.json'
+    partial_results_path = f'{exp_dir}/{file_suffix}_partial_results.txt'
+    save_freq = configs.get("eval_save_freq", 10)
     with torch.no_grad():
+        partial_f = open(partial_jsonl_path, 'w')
         for test_sample_step, batch in enumerate(tqdm.tqdm(test_loader)):
             if configs.get("val_subset_size") is not None and test_sample_step >= configs["val_subset_size"]:
                 break
             # NOTE: hardcoded for batch size of 1
             question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
             answer_tokens = answer_tokens.to(device)
-            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+            cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
             max_new_tokens = configs["max_new_tokens"][question_type[0]]
             llm_dtype = model.llm.get_input_embeddings().weight.dtype
             generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
@@ -112,34 +131,34 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
             generation = generation.strip().split("</s>")[0].strip()
             if "</s>" not in generation:
                 generation += "</s>"
-            preds.append({
+            pred = {
                 "question": "".join([i[0] for i in question]),
                 "question_type": question_type[0],
                 "question_step": question_step.item(),
                 "sample_paths": [i[0] for i in tactile],
                 "answer": answer,
                 "generation": generation
-            })
+            }
+            preds.append(pred)
             evaluator.evaluate(question="".join([i[0] for i in question]), generation=generation, answer=answer, question_type=question_type[0], question_step=question_step.item(), show_opd=False, show_pc=False, show_pss=False, show_pom=False, show_question=False)
+            partial_f.write(json.dumps(pred) + "\n")
+            partial_f.flush()
+            if save_freq and (test_sample_step + 1) % save_freq == 0:
+                with open(partial_json_path, 'w') as f:
+                    json.dump(preds, f, indent=4)
+                write_llm_results(evaluator.get_results(), partial_results_path)
+        partial_f.close()
     if did_merge:
         print("Unmerging LoRA adapters after testing...")
         try:
             model.llm.unmerge_adapter()
         except Exception as e:
             print(f"Warning: Could not unmerge adapters: {e}")
-    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_preds.json', 'w') as f:
+    with open(f'{exp_dir}/{file_suffix}_preds.json', 'w') as f:
         json.dump(preds, f, indent=4)
         f.close()
     results = evaluator.get_results()
-    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_results.txt', 'w') as f:
-        for task, stats in results.items():
-            f.write(f"{task}:\n")
-            for stat, value in stats.items():
-                if task in random_scores and stat in random_scores[task]:
-                    f.write(f"\t{stat}: {value} ({random_scores[task][stat]})\n")
-                else:
-                    f.write(f"\t{stat}: {value}\n")
-        f.close()
+    write_llm_results(results, f'{exp_dir}/{file_suffix}_results.txt')
     print(f"Evaluation ({file_suffix}) done!")
     return results
 
@@ -181,7 +200,8 @@ def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, co
             for batch in tqdm.tqdm(loader, desc=f"TTA pass {pass_idx + 1}/{n_passes}"):
                 question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
                 answer_tokens = answer_tokens.to(device)
-                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
+                cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
+                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
                 max_new_tokens = configs["max_new_tokens"][question_type[0]]
                 llm_dtype = model.llm.get_input_embeddings().weight.dtype
                 generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
@@ -238,14 +258,7 @@ def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, co
     with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_tta_preds.json', 'w') as f:
         json.dump(preds, f, indent=4)
     results = evaluator.get_results()
-    with open(f'{configs["exps_path"]}/{exp_name}/{file_suffix}_tta_results.txt', 'w') as f:
-        for task, stats in results.items():
-            f.write(f"{task}:\n")
-            for stat, value in stats.items():
-                if task in random_scores and stat in random_scores[task]:
-                    f.write(f"\t{stat}: {value} ({random_scores[task][stat]})\n")
-                else:
-                    f.write(f"\t{stat}: {value}\n")
+    write_llm_results(results, f'{configs["exps_path"]}/{exp_name}/{file_suffix}_tta_results.txt')
     print(f"TTA evaluation ({file_suffix}) done!")
 
 

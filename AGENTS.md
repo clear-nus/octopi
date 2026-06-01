@@ -1,7 +1,14 @@
 # Repository Guidelines
 
 ## Current Experiment Decisions (2026-06-01)
-The current final CLIP -> LLM pipeline run is `octopi_llm_repro_sorted`, logging to `queue_llm_repro_sorted.log`. It uses deterministic preprocessing/order fixes, deterministic PyTorch/CUDA guards, and the locked paper-close CLIP config below.
+Latest live status:
+- CLIP 8-frame/no-top-k seed repeat completed via tmux `octopi_clip_frames8_notopk`, log `queue_clip_frames8_notopk.log`, script `scripts/queue_clip_frames8_notopk_seed_reps.sh`. It is now the preferred performance-oriented encoder direction: `max_frames=8`, `top_k_val_checkpoints=1`, 30 epochs, LR `3e-4`, no smoothing/ranking/weight decay, scaled class-balanced CE, decoupled heads, and EMA `0.98`.
+- Completed 8-frame/no-top-k seeds selected by `val_mean`: average `val_mean=0.6204±0.0370`, `test_mean=0.6842±0.0443`, `test_combined=0.3842±0.0440`.
+- Re-parsing the same 8-frame/no-top-k runs by `val_combined` gives better diagnostics: average `val_mean=0.6093±0.0330`, `val_combined=0.3778±0.0505`, `test_mean=0.7035±0.0251`, `test_combined=0.4158±0.0539`. Use this only as a checkpoint-selection ablation; do not select by test metrics.
+- Prior 5-frame/top-k3 EMA averaging did not solve combined accuracy: completed top-k seeds 0/1/2/3 averaged about `test_combined=0.36`; seed2 remained weak (`topk test_combined=0.2895`).
+- LLM conclusion-only LoRA failed non-OPD tasks despite good OPD. Run `exps/2026_06_01_12_57_25_train_llm_train_val_test_lora_32_32_vicuna-7b_3000_full_pipeline_0_conclusionfix_lora_r32_lr0.0001` produced OPD hardness/roughness/texture `0.816/0.684/0.711`, OPD combined `0.395`, but object match `0.0`, comparison `0.0128`, and superlative `0.0`. The generations often missed the required `Conclusion:` structure, so conclusion-only masking is not recommended for Stage 2 as currently implemented.
+- Full-loss LoRA r32/lr1e-4 is running in tmux `octopi_llm_fullloss_r32`, log `queue_llm_full_loss_lora_r32.log`, script `scripts/queue_llm_full_loss_lora_r32.sh`. It reuses the conclusion-fix Stage 1 checkpoint, so it is a fast diagnostic, not a fully paper-close LLM run.
+- Paper-closer full-loss Stage 1 + Stage 2 is queued in tmux `octopi_llm_paperclose_full_stage12`, log `queue_llm_paperclose_full_stage12.log`, script `scripts/queue_llm_paperclose_full_stage12.sh`. It waits for `octopi_llm_fullloss_r32`, then reruns Stage 1 with full answer loss and Stage 2 with paper-ish LoRA `r=128`, `lr=2e-4`, `warmup_steps=20`.
 
 ### Final CLIP Config
 - 30 epochs, 5 frames, horizontal/vertical flip `0.5`.
@@ -10,11 +17,13 @@ The current final CLIP -> LLM pipeline run is `octopi_llm_repro_sorted`, logging
 - EMA enabled with `ema_decay=0.98`.
 - Decoupled property heads enabled; treat as an implementation detail unless the paper explicitly specifies a shared classifier trunk.
 - Checkpoint selection uses validation mean per-property accuracy (`val_mean`), not validation combined accuracy.
+- Current encoder decision: use 8 frames for the performance-oriented pipeline. It improves combined diagnostics over the 5-frame/top-k attempt, but is a paper-method deviation if the paper explicitly used/evaluated 5 sampled frames. Disclose `max_frames=8` separately from lower LR, scaled class-balanced CE, EMA, and checkpoint-selection changes.
 
 ### Main Paper-Method Deviations To Disclose
 - Lower CLIP LR (`3e-4` instead of paper `1e-3`).
 - Scaled class-balanced CE.
 - EMA weight averaging.
+- 8 sampled/evaluated frames instead of paper 5 frames, for the performance-oriented run.
 - CLIP checkpoint selection by `val_mean` instead of validation combined accuracy.
 
 ### Reproducibility Fixes
@@ -108,8 +117,9 @@ These are deviations from the original paper's methodology. Each is marked with 
 | Stage 2 LoRA LR grid top value 2e-4 → 1e-4 (2e-4 caused catastrophic forgetting) | **Active** | `scripts/run_llm_training.sh` |
 | Stage 2 warmup 20 → 50 steps | **Active** | `scripts/run_llm_training.sh` |
 | Stage 2 LoRA rank grid [128] → [32, 64, 128] | **Active** | `scripts/run_llm_training.sh` |
-| Stage 3: conclusion-only loss masking for reasoning tasks (masks description tokens; OPD tasks unmasked) | **Implemented, untested** | `src/train_llm.py`, `src/utils/model.py` |
+| Stage 3: conclusion-only loss masking for reasoning tasks (masks description tokens; OPD tasks unmasked) | **Implemented, not recommended as currently used** — OPD stayed good, but comparison/object-match/superlative collapsed because generations did not reliably produce the required `Conclusion:` format | `src/train_llm.py`, `src/utils/model.py` |
 | Stage 3: load from Stage 2 LoRA checkpoint (`adapter_model.bin` detection) | **Implemented, untested** | `src/train_llm.py` |
+| Test-time partial prediction saving (`*_partial_preds.jsonl`, `*_partial_results.txt`) | **Implemented** for future non-TTA LLM evaluations; existing running processes do not pick this up until restarted | `src/train_llm.py` |
 
 ## Planned Improvements
 

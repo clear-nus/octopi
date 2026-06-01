@@ -171,6 +171,94 @@ class PropertyClassifierEvaluator:
         return (labels == ordinal_predict(preds)).sum().item()
 
 
+def save_clip_checkpoint(configs, exp_name, encoder, vificlip, classifier, suffix=""):
+    encoder.model.vision_model = vificlip.clip_model.vision_model
+    torch.save(encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder{suffix}.pt")
+    torch.save(classifier.state_dict(), f"{configs['exps_path']}/{exp_name}/classifier{suffix}.pt")
+    torch.save(vificlip.state_dict(), f"{configs['exps_path']}/{exp_name}/vificlip{suffix}.pt")
+
+
+def average_state_dict_files(paths):
+    avg = None
+    dtypes = {}
+    for i, path in enumerate(paths):
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        if avg is None:
+            dtypes = {k: v.dtype for k, v in state.items()}
+            avg = {
+                k: v.detach().float() if torch.is_floating_point(v) else v.detach().clone()
+                for k, v in state.items()
+            }
+        else:
+            for k, v in state.items():
+                if torch.is_floating_point(v):
+                    avg[k].add_(v.detach().float())
+        del state
+    for k in avg:
+        if torch.is_floating_point(avg[k]):
+            avg[k].div_(len(paths))
+            avg[k] = avg[k].to(dtypes[k])
+    return avg
+
+
+def write_topk_averaged_checkpoint(configs, exp_name, topk_checkpoints):
+    if not topk_checkpoints:
+        return
+    ranked = sorted(topk_checkpoints, key=lambda x: x["val_mean"], reverse=True)
+    paths = {
+        "encoder": [c["encoder_path"] for c in ranked],
+        "classifier": [c["classifier_path"] for c in ranked],
+        "vificlip": [c["vificlip_path"] for c in ranked],
+    }
+    print("Averaging top-k EMA checkpoints by val_mean:")
+    for rank, c in enumerate(ranked, start=1):
+        print(f"  rank={rank} epoch={c['epoch']} val_mean={c['val_mean']}")
+    torch.save(average_state_dict_files(paths["encoder"]), f"{configs['exps_path']}/{exp_name}/encoder.pt")
+    torch.save(average_state_dict_files(paths["classifier"]), f"{configs['exps_path']}/{exp_name}/classifier.pt")
+    torch.save(average_state_dict_files(paths["vificlip"]), f"{configs['exps_path']}/{exp_name}/vificlip.pt")
+
+
+def evaluate_property_split(vificlip, classifier, loader, device, evaluator):
+    totals = {"hardness": 0, "roughness": 0, "texture": 0, "combined": 0}
+    num_samples = 0
+    vificlip.eval()
+    classifier.eval()
+    with torch.no_grad():
+        for batch in tqdm.tqdm(loader):
+            objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, all_indices = batch
+            hardness_labels = hardness_labels.to(device)
+            roughness_labels = roughness_labels.to(device)
+            texture_labels = texture_labels.to(device)
+            batch_size = objects_tactile_frames[0].shape[0]
+            all_tactile_embeds = []
+            for otf in objects_tactile_frames:
+                video_features, _, _, _ = vificlip(otf.to(device), None, None, all_indices)
+                all_tactile_embeds.append(video_features)
+            all_tactile_embeds = torch.cat(all_tactile_embeds, dim=-1)
+            hardness_preds, roughness_preds, texture_preds = classifier(all_tactile_embeds)
+            num_samples += batch_size
+            totals["hardness"] += evaluator.evaluate(hardness_preds, hardness_labels)
+            totals["roughness"] += evaluator.evaluate(roughness_preds, roughness_labels)
+            totals["texture"] += evaluator.evaluate(texture_preds, texture_labels)
+            combined_preds = torch.stack([
+                ordinal_predict(hardness_preds),
+                ordinal_predict(roughness_preds),
+                ordinal_predict(texture_preds),
+            ], dim=-1)
+            combined_labels = torch.cat([
+                torch.unsqueeze(hardness_labels, dim=-1),
+                torch.unsqueeze(roughness_labels, dim=-1),
+                torch.unsqueeze(texture_labels, dim=-1),
+            ], dim=-1)
+            totals["combined"] += np.sum(np.all(combined_preds.cpu().detach().numpy() == combined_labels.cpu().detach().numpy(), axis=-1))
+    return (
+        totals["hardness"] / num_samples,
+        totals["roughness"] / num_samples,
+        totals["texture"] / num_samples,
+        totals["combined"] / num_samples,
+    )
+
+
 def main(configs, exp_name, g, device):
     # data
     try:
@@ -265,6 +353,10 @@ def main(configs, exp_name, g, device):
         if ema is not None:
             print("WARNING: both EMA and SWA enabled; SWA takes precedence for eval/checkpoint.")
     best_val_acc = -1
+    top_k_val_checkpoints = int(configs.get("top_k_val_checkpoints", 1) or 1)
+    topk_checkpoints = []
+    if top_k_val_checkpoints > 1:
+        print(f"Top-k val checkpoint averaging ON (k={top_k_val_checkpoints}, selector=val_mean)")
     epochs = configs["num_epochs"]
     for epoch in tqdm.tqdm(range(epochs)):
         total_train_hardness_correct, total_train_roughness_correct, total_train_texture_correct, total_train_combined_correct = 0, 0, 0, 0
@@ -371,15 +463,40 @@ def main(configs, exp_name, g, device):
         print(f"VAL accuracies [hardness, roughness, texture, combined]: {total_val_hardness_correct / num_val_samples}, {total_val_roughness_correct / num_val_samples}, {total_val_texture_correct / num_val_samples}, {total_val_combined_correct / num_val_samples}")
         print(f"TEST accuracies [hardness, roughness, texture, combined]: {total_test_hardness_correct / num_test_samples}, {total_test_roughness_correct / num_test_samples}, {total_test_texture_correct / num_test_samples}, {total_test_combined_correct / num_test_samples}")
         val_mean_acc = (total_val_hardness_correct + total_val_roughness_correct + total_val_texture_correct) / (3 * num_val_samples)
+        if top_k_val_checkpoints > 1:
+            topk_checkpoints.append({
+                "epoch": epoch + 1,
+                "val_mean": float(val_mean_acc),
+            })
+            ckpt = topk_checkpoints[-1]
+            suffix = f"_topk_tmp_epoch_{ckpt['epoch']:03d}"
+            ckpt["encoder_path"] = f"{configs['exps_path']}/{exp_name}/encoder{suffix}.pt"
+            ckpt["classifier_path"] = f"{configs['exps_path']}/{exp_name}/classifier{suffix}.pt"
+            ckpt["vificlip_path"] = f"{configs['exps_path']}/{exp_name}/vificlip{suffix}.pt"
+            save_clip_checkpoint(configs, exp_name, encoder, vificlip, classifier, suffix=suffix)
+            topk_checkpoints = sorted(topk_checkpoints, key=lambda x: x["val_mean"], reverse=True)
+            while len(topk_checkpoints) > top_k_val_checkpoints:
+                removed = topk_checkpoints.pop()
+                for path_key in ["encoder_path", "classifier_path", "vificlip_path"]:
+                    path = removed[path_key]
+                    if os.path.exists(path):
+                        os.remove(path)
+            kept_epochs = [c["epoch"] for c in topk_checkpoints]
+            print(f"Top-k val_mean checkpoints kept: {kept_epochs}")
         if val_mean_acc > best_val_acc:
             print("Saving encoder...")
             best_val_acc = val_mean_acc
-            encoder.model.vision_model = vificlip.clip_model.vision_model
-            torch.save(encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
-            torch.save(classifier.state_dict(), f"{configs['exps_path']}/{exp_name}/classifier.pt")
-            torch.save(vificlip.state_dict(), f"{configs['exps_path']}/{exp_name}/vificlip.pt")
+            save_clip_checkpoint(configs, exp_name, encoder, vificlip, classifier)
         if avg is not None:
             avg.restore()
+    if top_k_val_checkpoints > 1:
+        write_topk_averaged_checkpoint(configs, exp_name, topk_checkpoints)
+        vificlip.load_state_dict(torch.load(f"{configs['exps_path']}/{exp_name}/vificlip.pt", map_location=device, weights_only=True))
+        classifier.load_state_dict(torch.load(f"{configs['exps_path']}/{exp_name}/classifier.pt", map_location=device, weights_only=True))
+        topk_val = evaluate_property_split(vificlip, classifier, val_loader, device, evaluator)
+        topk_test = evaluate_property_split(vificlip, classifier, test_loader, device, evaluator)
+        print(f"TOPK_AVG VAL accuracies [hardness, roughness, texture, combined]: {topk_val[0]}, {topk_val[1]}, {topk_val[2]}, {topk_val[3]}")
+        print(f"TOPK_AVG TEST accuracies [hardness, roughness, texture, combined]: {topk_test[0]}, {topk_test[1]}, {topk_test[2]}, {topk_test[3]}")
 
 
 if __name__ == "__main__":
