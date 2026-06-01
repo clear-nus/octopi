@@ -193,8 +193,7 @@ def main(configs, exp_name, g, device):
         clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
     else:
         clip = CLIPModel.from_pretrained(configs["use_clip"]).to(device)
-    fusion_layers = configs.get("fusion_layers", [-2])
-    vificlip = ViFiCLIP(clip, freeze_text_encoder=True, fusion_layers=fusion_layers).to(device)
+    vificlip = ViFiCLIP(clip, freeze_text_encoder=True).to(device)
     unfreeze_last_n = configs.get("unfreeze_last_n_layers", 0)
     finetune_lr = configs.get("finetune_lr", 1e-5)
     if configs["prompt_learning"]:

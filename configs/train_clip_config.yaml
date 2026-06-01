@@ -1,6 +1,6 @@
-data_dir: data
+data_dir: data/clip_repro_sorted_seed_reps/seed_1
 cuda: 7
-seed: 0
+seed: 1
 exps_path: exps
 flip_p: 0.5
 rotation_degrees: 0
@@ -30,8 +30,6 @@ ranking_loss_weight: 0.0
 ranking_margin: 0.3
 class_balanced_loss: true
 class_balance_mode: scaled
-fusion_layers:
-- -2
 ema_decay: 0.98
 decoupled_heads: true
 decoupled_head_dim: 128

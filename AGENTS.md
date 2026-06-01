@@ -29,6 +29,11 @@ The current final CLIP -> LLM pipeline run is `octopi_llm_repro_sorted`, logging
 - LLM overall reporting should include per-task accuracies for OPD, property comparison, property superlative selection, and property-object match. If one headline number is needed, use a macro-average over task-level accuracies and still show the per-task breakdown.
 - Never select checkpoints by test metrics, including `test_combined`.
 
+### Paper-Explicit Vs Engineering Choices
+Treat these as paper-alignment constraints: CLIP ViT-L/14, ViFi-CLIP-style frame encoding/pooling, VPT with 8 vision prompt tokens and 12 prompt layers, salient-frame preprocessing, 5 sampled/evaluated frames, horizontal/vertical flip `0.5`, 30 CLIP epochs, AdamW with CLIP LR `1e-3` and no weight decay, three CE-trained property classifiers, validation combined checkpoint selection, Vicuna v1.5, tactile encoder + projector + LLM, `<tact_start>` / `<tact_end>` wrapping, Stage 1 without LoRA, Stage 2 with LoRA, Stage 1 around 3200 steps, and original/reproduction LoRA centered on rank 128.
+
+Treat these as engineering choices or ablations unless paper text later says otherwise: CLIP hidden layer (`hidden_states[-2]`), CLS vs patch mean, decoupled property heads, sorted preprocessing order, deterministic CUDA/PyTorch guards, scaled class-balanced CE, EMA/SWA, `val_mean` checkpoint selection, label smoothing, ranking loss, extra augmentations, LLM projector LayerNorm, per-group gradient clipping, val loader `shuffle=False`, Stage 1 `val_freq=200`, Stage 2 warmup 50, LoRA LR grid `[1e-4,5e-5,2e-5]`, LoRA rank grid `[32,64,128]`, bf16 single-GPU PEFT fixes, and `conclusion_only_loss`.
+
 ## Project Structure & Module Organization
 `src/` contains the training and evaluation entry points: `train_clip.py`, `train_llm.py`, `test_two_step.py`, `evaluate_llm.py`, and `interact.py`. Shared dataset, model, and config helpers live in `src/utils/`. Configs are in `configs/`; reproducibility scripts are in `scripts/`. Raw GelSight `.mov` files live in `dataset/`, processed frame folders and QA JSON files are generated into `data/`, figures stay in `assets/`, and run outputs are written to `exps/<timestamp>_<exp_id>/`.
 
@@ -80,7 +85,7 @@ These are deviations from the original paper's methodology. Each is marked with 
 | Change | Status | Files |
 |--------|--------|-------|
 | Patch token mean pooling (`hidden_states[-2][:, 1:].mean()`) instead of CLS token | **Reverted** — CLS outperforms patch mean empirically (0.553 vs 0.421 peak test combined) | `src/utils/model.py` |
-| Multi-layer feature fusion over layers `[-2, -6, -12]` instead of a single layer | **Reverted to single layer** (`fusion_layers: [-2]`) — multi-layer did not improve over CLS single-layer baseline | `src/utils/model.py`, `src/train_clip.py` |
+| Multi-layer feature fusion over layers `[-2, -6, -12]` instead of a single layer | **Removed** — multi-layer did not improve over the single `hidden_states[-2][:, 0]` CLS baseline | `src/utils/model.py`, `src/train_clip.py` |
 | Pairwise ranking loss added on top of CE loss (`ranking_loss_weight: 0.5`) | **Implemented, but not recommended for the paper-close CLIP config** | `src/train_clip.py` |
 | Checkpoint selection by validation mean per-property accuracy (`val_mean`) instead of validation combined accuracy | **Active** — final reproducible CLIP/LLM run uses `val_mean` because `val_combined` is too coarse/noisy on the small val split | `src/train_clip.py` |
 | `num_epochs` reduced to 15 (paper: 30) | **Implemented, but not recommended for the paper-close CLIP config** — final paper-close ablations favor retaining 30 epochs | `configs/train_clip_config.yaml` |
@@ -143,8 +148,8 @@ Fixed val_loader `shuffle=True` → `shuffle=False` in `train_llm.py` for reprod
 ### ❌ CLIP — Patch Token Mean Pooling (REVERTED)
 Tried `hidden_states[-2][:, 1:].mean(dim=1)` instead of the CLS token. Peak test combined dropped from 0.553 → 0.421. CLS is trained by CLIP's contrastive objective to be the aggregated discriminative summary; unweighted patch mean loses this. ViFiCLIP reverted to `hidden_states[-2][:, 0]`.
 
-### ❌ CLIP — Multi-Layer Feature Fusion (REVERTED)
-Tried averaging CLS/patch means from layers `[-2, -6, -12]`. Did not improve over single-layer baseline. Reverted to `fusion_layers: [-2]`.
+### ❌ CLIP — Multi-Layer Feature Fusion (REMOVED)
+Tried averaging CLS/patch means from layers `[-2, -6, -12]`. Did not improve over the single `hidden_states[-2][:, 0]` CLS baseline. The unused config surface was removed to avoid implying feature fusion is active.
 
 ### ✅ CLIP — Pairwise Ranking Loss (IMPLEMENTED)
 `train_clip.py` adds a margin ranking loss on top of CE. For each pair (i, j) where label_i > label_j, penalises if predicted expected-rank score_i <= score_j + margin. Weight controlled by `ranking_loss_weight` (currently 0.5). Does not replace CE loss.

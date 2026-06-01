@@ -75,10 +75,9 @@ def sinusoidal_positional_embedding(token_sequence_size, indices, token_embeddin
 
     
 class ViFiCLIP(nn.Module):
-    def __init__(self, clip_model, freeze_text_encoder, fusion_layers=None):
+    def __init__(self, clip_model, freeze_text_encoder):
         super().__init__()
         self.clip_model = clip_model
-        self.fusion_layers = fusion_layers if fusion_layers is not None else [-2]
         if freeze_text_encoder:
             for name, param in self.clip_model.named_parameters():
                 if "text_model" in name:

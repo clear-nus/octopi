@@ -1,5 +1,5 @@
 data_dir: data
-cuda: 6
+cuda: 7
 seed: 0
 exps_path: exps
 flip_p: 0.5
@@ -15,8 +15,8 @@ batch_size: 8
 gradient_accumulation_steps: 4
 output_size: 1024
 prompt_learning: true
-label_smoothing: 0.1
-max_frames: 8
+label_smoothing: 0.0
+max_frames: 5
 unfreeze_last_n_layers: 0
 finetune_lr: 1.0e-05
 num_context_vision: 8
@@ -30,7 +30,7 @@ ranking_loss_weight: 0.0
 ranking_margin: 0.3
 class_balanced_loss: true
 class_balance_mode: scaled
-ema_decay: 0.0
+ema_decay: 0.98
 decoupled_heads: true
 decoupled_head_dim: 128
 swa: false

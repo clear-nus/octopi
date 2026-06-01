@@ -31,8 +31,7 @@ def seed_worker(worker_id):
 
 def build_models(configs, device):
     clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
-    vificlip = ViFiCLIP(clip, freeze_text_encoder=True,
-                        fusion_layers=configs.get("fusion_layers", [-2])).to(device)
+    vificlip = ViFiCLIP(clip, freeze_text_encoder=True).to(device)
     classifier = CLIPClassifier(output_size=configs["output_size"]).to(device)
     return vificlip, classifier
 
