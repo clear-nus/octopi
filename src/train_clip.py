@@ -371,10 +371,10 @@ def main(configs, exp_name, g, device):
         print(f"TRAIN accuracies [hardness, roughness, texture, combined]: {total_train_hardness_correct / num_train_samples}, {total_train_roughness_correct / num_train_samples}, {total_train_texture_correct / num_train_samples}, {total_train_combined_correct / num_train_samples}")
         print(f"VAL accuracies [hardness, roughness, texture, combined]: {total_val_hardness_correct / num_val_samples}, {total_val_roughness_correct / num_val_samples}, {total_val_texture_correct / num_val_samples}, {total_val_combined_correct / num_val_samples}")
         print(f"TEST accuracies [hardness, roughness, texture, combined]: {total_test_hardness_correct / num_test_samples}, {total_test_roughness_correct / num_test_samples}, {total_test_texture_correct / num_test_samples}, {total_test_combined_correct / num_test_samples}")
-        val_combined_acc = total_val_combined_correct / num_val_samples
-        if val_combined_acc > best_val_acc:
+        val_mean_acc = (total_val_hardness_correct + total_val_roughness_correct + total_val_texture_correct) / (3 * num_val_samples)
+        if val_mean_acc > best_val_acc:
             print("Saving encoder...")
-            best_val_acc = val_combined_acc
+            best_val_acc = val_mean_acc
             encoder.model.vision_model = vificlip.clip_model.vision_model
             torch.save(encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
             torch.save(classifier.state_dict(), f"{configs['exps_path']}/{exp_name}/classifier.pt")

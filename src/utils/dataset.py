@@ -69,10 +69,10 @@ class CLIPPropertyUniqueDataset(Dataset):
 
         self.objects = []
         self.all_samples = []
-        for k in self.samples.keys():
+        for k in sorted(self.samples.keys()):
             if k not in TRAIN_OBJECTS + VAL_OBJECTS + TEST_OBJECTS:
                 continue
-            for v in self.samples[k]:
+            for v in sorted(self.samples[k]):
                 self.objects.append(k)
                 self.all_samples.append(v)
 

@@ -119,7 +119,7 @@ def get_frames(dataset_path, frames_output_path):
 
 
     # extract videos
-    dataset_files = os.listdir(dataset_path)
+    dataset_files = sorted(os.listdir(dataset_path))
     if '.DS_Store' in dataset_files:
         dataset_files.remove('.DS_Store')
 
@@ -137,7 +137,7 @@ def get_frames(dataset_path, frames_output_path):
 def get_samples(data_output_path, train_json_path, val_json_path, test_json_path):
     # shuffle seen objects before train/val split
     random.shuffle(TRAIN_OBJECTS)
-    samples = [i for i in os.listdir(data_output_path) if os.path.isdir(os.path.join(data_output_path, i))]
+    samples = sorted(i for i in os.listdir(data_output_path) if os.path.isdir(os.path.join(data_output_path, i)))
     train_sample_paths = {}
     val_sample_paths = {}
     test_sample_paths = {}
