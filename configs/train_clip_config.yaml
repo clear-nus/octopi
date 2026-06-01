@@ -1,6 +1,6 @@
 data_dir: data
-cuda: 6
-seed: 2
+cuda: 7
+seed: 0
 exps_path: exps
 flip_p: 0.5
 rotation_degrees: 0
@@ -15,7 +15,7 @@ batch_size: 8
 gradient_accumulation_steps: 4
 output_size: 1024
 prompt_learning: true
-label_smoothing: 0.1
+label_smoothing: 0.0
 max_frames: 5
 unfreeze_last_n_layers: 0
 finetune_lr: 1.0e-05

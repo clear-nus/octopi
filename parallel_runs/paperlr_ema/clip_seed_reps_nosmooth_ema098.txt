@@ -1,1 +1,9 @@
 [seed-reps] seed=0 clip_seed_0_nosmooth_ema098 :: val_mean=0.5833333333333334 test_mean=0.7192982456140351 test_combined=0.42105263157894735
+[seed-reps] seed=1 clip_seed_1_nosmooth_ema098 :: val_mean=0.648148148148148 test_mean=0.6929824561403509 test_combined=0.34210526315789475
+[seed-reps] seed=2 clip_seed_2_nosmooth_ema098 :: val_mean=0.6574074074074074 test_mean=0.6491228070175438 test_combined=0.34210526315789475
+[seed-reps] seed=3 clip_seed_3_nosmooth_ema098 :: val_mean=0.5925925925925926 test_mean=0.6929824561403509 test_combined=0.3684210526315789
+[seed-reps] seed=4 clip_seed_4_nosmooth_ema098 :: val_mean=0.6203703703703703 test_mean=0.7105263157894738 test_combined=0.4473684210526316
+[seed-reps] aggregate:
+  val_mean      = 0.620 +/- 0.033 (n=5)
+  test_mean     = 0.693 +/- 0.027 (n=5)
+  test_combined = 0.384 +/- 0.048 (n=5)

@@ -763,7 +763,11 @@ if __name__ == "__main__":
     torch.random.manual_seed(configs["seed"])
     torch.cuda.manual_seed(configs["seed"])
     torch.cuda.manual_seed_all(configs["seed"])
-    # torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     np.random.seed(configs["seed"])
     random.seed(configs["seed"])
     def seed_worker(worker_id):

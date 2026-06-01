@@ -7,6 +7,8 @@ conda activate octopi
 
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export PYTHONHASHSEED=0
 
 # Array of seeds to test
 SEEDS=(0)

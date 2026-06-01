@@ -1,6 +1,6 @@
 data_dir: data
 cuda: 7
-seed: 1
+seed: 0
 exps_path: exps
 flip_p: 0.5
 rotation_degrees: 0
@@ -8,8 +8,8 @@ color_jitter: 0.0
 gaussian_blur: false
 use_clip: openai/clip-vit-large-patch14
 num_epochs: 30
-lr: 0.0003
-classifier_lr: 0.0003
+lr: 0.001
+classifier_lr: 0.001
 warmup_ratio: 0.2
 batch_size: 8
 gradient_accumulation_steps: 4

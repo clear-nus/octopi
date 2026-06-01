@@ -1,0 +1,15 @@
+[lr-probe] aggregate lr5e-4_ema098_nosmooth n=3
+  val_mean_select_test_mean           = 0.681 +/- 0.054
+  val_mean_select_test_combined       = 0.395 +/- 0.105
+  val_combined_select_test_mean       = 0.658 +/- 0.032
+  val_combined_select_test_combined   = 0.342 +/- 0.070
+[lr-probe] aggregate lr1e-4_ema098_nosmooth n=3
+  val_mean_select_test_mean           = 0.684 +/- 0.046
+  val_mean_select_test_combined       = 0.395 +/- 0.115
+  val_combined_select_test_mean       = 0.670 +/- 0.054
+  val_combined_select_test_combined   = 0.404 +/- 0.055
+[lr-probe] aggregate lr5e-4_ema098_nosmooth n=3
+  val_mean_select_test_mean           = 0.681 +/- 0.054
+  val_mean_select_test_combined       = 0.395 +/- 0.105
+  val_combined_select_test_mean       = 0.658 +/- 0.032
+  val_combined_select_test_combined   = 0.342 +/- 0.070

@@ -53,13 +53,13 @@ These are deviations from the original paper's methodology. Each is marked with 
 | Patch token mean pooling (`hidden_states[-2][:, 1:].mean()`) instead of CLS token | **Reverted** — CLS outperforms patch mean empirically (0.553 vs 0.421 peak test combined) | `src/utils/model.py` |
 | Multi-layer feature fusion over layers `[-2, -6, -12]` instead of a single layer | **Reverted to single layer** (`fusion_layers: [-2]`) — multi-layer did not improve over CLS single-layer baseline | `src/utils/model.py`, `src/train_clip.py` |
 | Pairwise ranking loss added on top of CE loss (`ranking_loss_weight: 0.5`) | **Implemented, but not recommended for the paper-close CLIP config** | `src/train_clip.py` |
-| Val save criterion reverted to mean per-property accuracy (combined was too noisy on ~69 val samples) | **Active** | `src/train_clip.py` |
+| Checkpoint selection by validation combined accuracy | **Active** — restored for final paper-aligned CLIP runs | `src/train_clip.py` |
 | `num_epochs` reduced to 15 (paper: 30) | **Implemented, but not recommended for the paper-close CLIP config** — final paper-close ablations favor retaining 30 epochs | `configs/train_clip_config.yaml` |
 | `max_frames` set above 5 (paper: 5) | **Implemented, but not recommended for the paper-close CLIP config** — the Octopi paper samples/evaluates 5 frames | `configs/train_clip_config.yaml` |
 | Data augmentation config keys added (rotation, ColorJitter, GaussianBlur) | **Disabled** (all set to 0/false) — hurt GelSight color-encoded force features | `src/utils/dataset.py`, configs |
 | `unfreeze_last_n_layers` config key added | **Disabled** (set to 0) | `src/train_clip.py` |
 | Class-balanced (continuous imbalance-scaled) loss, gated by `class_balanced_loss` | **Gated, default OFF** — recommended for the final paper-close CLIP config based on k-fold ablation; see investigation section | `src/train_clip.py` |
-| EMA weight averaging over VPT + finetune + classifier params, gated by `ema_decay` | **Gated, default 0 (OFF)** — decay 0.98 tuned for the ~135-step regime; val evaluated on shadow weights | `src/train_clip.py` |
+| EMA weight averaging over VPT + finetune + classifier params, gated by `ema_decay` | **Active for final CLIP config** — `ema_decay=0.98`; val/test evaluated on shadow weights | `src/train_clip.py` |
 | Decoupled classifier heads, gated by `decoupled_heads` | **Gated, default OFF** — recommended engineering default; not clearly a paper-method deviation unless the paper explicitly specified a shared classifier trunk | `src/utils/model.py`, `src/train_clip.py` |
 | SWA-style tail weight averaging, gated by `swa` | **Gated, default OFF** — end-of-epoch averaging starts at `swa_start_epoch`; no cyclic LR or BN recalibration | `src/train_clip.py` |
 
@@ -236,6 +236,80 @@ Recommended paper-close CLIP config:
 - `decoupled_heads=true`
 
 Paper-method interpretation: the clear deviations to disclose are lower LR and scaled class-balanced CE. Decoupled heads should be described as "separate lightweight prediction heads for each property" and treated as an implementation detail unless the original paper/code explicitly used a shared classifier trunk. Final paper numbers should still be canonical-split seed repeats; these k-fold results are ablation evidence.
+
+### CLIP — `target_newer` Strong Non-Paper-Close Reference (2026-05-31)
+`target_newer` is the stronger but less paper-close endpoint from the decoupled scaled-CBS ablation queue. Keep it as a diagnostic/reference config, not the default paper-close config.
+
+Config:
+- `num_epochs=15`
+- `max_frames=8`
+- `ranking_loss_weight=0.5`
+- `weight_decay=0.05`
+- `lr=0.0003`
+- `classifier_lr=0.0003`
+- `label_smoothing=0.1`
+- `class_balanced_loss=true`
+- `class_balance_mode=scaled`
+- `decoupled_heads=true`
+- `ema_decay=0.0`
+- `swa=false`
+- `flip_p=0.5`
+
+K-fold results with the current `val_mean` checkpoint selector:
+- `val_mean=0.669±0.063`
+- `test_mean=0.728±0.027`
+- `test_combined=0.442±0.060`
+
+Re-parsed with paper-style `val_combined` checkpoint selection:
+- `test_mean=0.735`
+- `test_combined=0.474`
+
+Differences from the paper-close endpoint:
+- 15 epochs instead of 30.
+- 8 frames instead of the paper's 5.
+- Ranking loss enabled.
+- Weight decay enabled.
+- Label smoothing enabled.
+
+Use this run to understand the ceiling from extra regularization/objective changes, but prefer the paper-close path unless those deviations are explicitly justified.
+
+### CLIP — Locked Final Paper-Close Config (2026-06-01)
+Use this as the locked CLIP encoder config before LLM training:
+- `num_epochs=30`
+- `max_frames=5`
+- `lr=0.0003`
+- `classifier_lr=0.0003`
+- `ranking_loss_weight=0.0`
+- `weight_decay=0.0`
+- `label_smoothing=0.0`
+- `class_balanced_loss=true`
+- `class_balance_mode=scaled`
+- `class_balance_strength=1.0`
+- `class_balance_properties=[hardness,roughness,texture]`
+- `decoupled_heads=true`
+- `decoupled_head_dim=128`
+- `ema_decay=0.98`
+- `swa=false`
+- `flip_p=0.5`
+- `rotation_degrees=0`
+- `color_jitter=0.0`
+- `gaussian_blur=false`
+- checkpoint selection by validation combined accuracy (`val_combined`)
+
+Paper-method interpretation:
+- Paper-aligned: 30 epochs, 5 frames, no ranking loss, no weight decay, no label smoothing, validation-combined checkpoint selection.
+- Clear deviations to disclose: lower LR (`3e-4` instead of `1e-3`), scaled class-balanced CE, EMA.
+- Implementation detail unless contradicted by paper/code: decoupled property heads.
+
+Canonical 5-seed result for this config, re-parsed with paper-style `val_combined` selection:
+- `test_mean=0.702±0.038`
+- `test_combined=0.426±0.068`
+- Per-seed `test_combined`: `[0.526, 0.421, 0.342, 0.395, 0.447]`.
+
+LR probe with the same config except LR, 3 seeds each:
+- `lr=5e-4`: `val_combined` selection gave `test_mean=0.658±0.032`, `test_combined=0.342±0.070`.
+- `lr=1e-4`: `val_combined` selection gave `test_mean=0.670±0.054`, `test_combined=0.404±0.055`.
+- Decision: keep `lr=3e-4`; neither `5e-4` nor `1e-4` beat it.
 
 ### Tooling added (all CLIP-eval helpers)
 - `scripts/run_clip_sweep.sh` — two-phase rotation then ranking sweep; backs up/restores config via trap.
