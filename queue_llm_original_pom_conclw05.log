@@ -1,0 +1,43 @@
+[llm-qk-original-pom-conclw05] queued Thu Jun  4 03:36:43 PM UTC 2026
+[llm-qk-original-pom-conclw05] waiting for tmux session octopi_llm_originalpom_qk to finish
+[llm-qk-original-pom-conclw05] start Thu Jun  4 05:06:43 PM UTC 2026
+[llm-qk-original-pom-conclw05] Stage 2: q/k LoRA, original POM, full loss + conclusion_loss_weight=0.5
+Updated data_dir to /tmp/octopi_llm_frames8_encoder_full_stage12_data
+Updated train_files to ['/tmp/octopi_llm_frames8_encoder_full_stage12_data/train_qa.json']
+Updated val_files to ['/tmp/octopi_llm_frames8_encoder_full_stage12_data/val_opd_qa.json', '/tmp/octopi_llm_frames8_encoder_full_stage12_data/val_qa.json']
+Updated test_files to ['/tmp/octopi_llm_frames8_encoder_full_stage12_data/test_opd_qa.json', '/tmp/octopi_llm_frames8_encoder_full_stage12_data/test_qa.json']
+Updated seed to 0
+Updated cuda to 6
+Updated gpu_config to configs/gpu_config_7b.json
+Updated encoder_path to exps/2026_06_01_15_28_38_train_clip_clip_seed_0_repro_sorted_valmean_ema098_frames8_notopk/encoder.pt
+Updated max_frames to 8
+Updated use_lora to True
+Updated lora_trained to False
+Updated max_train_steps to 3000
+Updated projection_path to exps/2026_06_02_11_37_05_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0_frames8enc_fullloss_stage1_8000_paperaligned/best_project.pt
+Updated tokenizer_path to exps/2026_06_02_11_37_05_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0_frames8enc_fullloss_stage1_8000_paperaligned/tokenizer
+Updated llm_path to exps/2026_06_02_11_37_05_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0_frames8enc_fullloss_stage1_8000_paperaligned/best_llm_weights.pt
+Updated exps_path to exps
+Updated freeze_encoder to True
+Updated freeze_projection to True
+Updated modules_to_save to ['embed_tokens']
+Updated projection_lr to 2e-05
+Updated llm_lr to 0.0002
+Updated warmup_steps to 20
+Updated val_freq to 150
+Updated val_checkpoint_metric to loss
+Updated r to 128
+Updated lora_alpha to 256
+Updated lora_dropout to 0.05
+Updated target_modules to ['q_proj', 'k_proj']
+Updated llm_gradient_accumulation_steps to 16
+Updated conclusion_only_loss to False
+Updated conclusion_loss_weight to 0.5
+Updated pom_option_id_format to False
+Updated pom_candidate_permutation_augmentation to 0
+Updated opd_consistency_loss_weight to 0.0
+Updated train to True
+Updated val to True
+Updated test to True
+Updated tta_passes to 1
+[llm-qk-original-pom-conclw05] restoring config

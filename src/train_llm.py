@@ -1,11 +1,12 @@
 import os
 import torch.nn as nn
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 from torch import optim
 import tqdm
 import json
 import numpy as np
+from collections import defaultdict, Counter
 from peft import PeftModel, PeftConfig, get_peft_model, LoraConfig, set_peft_model_state_dict
 from accelerate import infer_auto_device_map, init_empty_weights
 from utils.dataset import *
@@ -19,6 +20,71 @@ import sys
 from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup
 from transformers.utils import logging
 from evaluate_llm import LLMEvaluator, random_scores
+
+
+def llm_task_group(question_type):
+    if question_type.endswith("_object_property_description"):
+        return "opd"
+    if question_type.endswith("_property_object_match"):
+        return "pom"
+    if question_type.endswith("_property_comparison"):
+        return "pc"
+    if "property_superlative_selection" in question_type:
+        return "pss"
+    return "other"
+
+
+def get_conclusion_loss_weight(configs, question_type):
+    global_weight = configs.get("conclusion_loss_weight", 0.0)
+    pom_weight = configs.get("pom_conclusion_loss_weight", None)
+    task_groups = configs.get("conclusion_loss_task_groups", None)
+    task_group = llm_task_group(question_type)
+    if task_groups is not None and task_group not in task_groups:
+        return 0.0
+    if pom_weight is not None and task_group == "pom":
+        return pom_weight
+    return global_weight
+
+
+class TaskBalancedSampler(Sampler):
+    def __init__(self, dataset, accumulation_steps, seed=0):
+        self.dataset = dataset
+        self.accumulation_steps = accumulation_steps
+        self.seed = seed
+        self.groups = defaultdict(list)
+        for idx, sample in enumerate(dataset.samples):
+            self.groups[llm_task_group(sample[0]["question_type"])].append(idx)
+        self.group_names = sorted(self.groups.keys())
+        self.per_group = max(1, accumulation_steps // max(len(self.group_names), 1))
+        self.total_size = len(dataset)
+
+    def __iter__(self):
+        rng = random.Random(self.seed)
+        groups = {name: indices[:] for name, indices in self.groups.items()}
+        cursors = {name: 0 for name in self.group_names}
+        for indices in groups.values():
+            rng.shuffle(indices)
+        yielded = 0
+        while yielded < self.total_size:
+            window = []
+            for name in self.group_names:
+                indices = groups[name]
+                if cursors[name] + self.per_group > len(indices):
+                    rng.shuffle(indices)
+                    cursors[name] = 0
+                start = cursors[name]
+                end = start + self.per_group
+                window.extend(indices[start:end])
+                cursors[name] = end
+            rng.shuffle(window)
+            for idx in window:
+                if yielded >= self.total_size:
+                    break
+                yielded += 1
+                yield idx
+
+    def __len__(self):
+        return self.total_size
 
 
 def write_llm_results(results, path):
@@ -67,15 +133,23 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
     with torch.no_grad():
         val_loss_total = 0.0
         val_steps = 0
+        task_loss_totals = {}
+        task_loss_counts = {}
         for i, batch in enumerate(tqdm.tqdm(val_loader, desc="Evaluating metrics")):
             if val_subset_size is not None and i >= val_subset_size:
                 break
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
             answer_tokens = answer_tokens.to(device)
-            cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
-            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
+            conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
+            cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices,
+                                             conclusion_start=cs, conclusion_only=configs.get("conclusion_only_loss", False),
+                                             conclusion_loss_weight=conclusion_weight)
             val_loss_total += outputs.loss.item()
             val_steps += 1
+            task = question_type[0]
+            task_loss_totals[task] = task_loss_totals.get(task, 0.0) + outputs.loss.item()
+            task_loss_counts[task] = task_loss_counts.get(task, 0) + 1
             # Generation dynamically removed to speed up validation since we save on loss
     if did_merge:
         print("Unmerging LoRA adapters to resume training...")
@@ -84,8 +158,19 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
         except Exception as e:
             print(f"Warning: Could not unmerge adapters: {e}")
     val_loss = val_loss_total / max(val_steps, 1)
+    balanced_val_loss = None
+    if task_loss_totals:
+        print("Validation Loss by task:")
+        for task in sorted(task_loss_totals):
+            task_loss = task_loss_totals[task] / max(task_loss_counts[task], 1)
+            print(f"  {task}: {task_loss:.4f} ({task_loss_counts[task]} samples)")
+        balanced_val_loss = np.mean([
+            task_loss_totals[task] / max(task_loss_counts[task], 1)
+            for task in task_loss_totals
+        ])
+        print(f"Balanced validation loss: {balanced_val_loss:.4f}")
     model.train()
-    return val_loss
+    return val_loss, balanced_val_loss
 
 
 def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, file_suffix):
@@ -118,10 +203,13 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
             if configs.get("val_subset_size") is not None and test_sample_step >= configs["val_subset_size"]:
                 break
             # NOTE: hardcoded for batch size of 1
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
             answer_tokens = answer_tokens.to(device)
-            cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
-            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
+            conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
+            cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices,
+                                             conclusion_start=cs, conclusion_only=configs.get("conclusion_only_loss", False),
+                                             conclusion_loss_weight=conclusion_weight)
             max_new_tokens = configs["max_new_tokens"][question_type[0]]
             llm_dtype = model.llm.get_input_embeddings().weight.dtype
             generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
@@ -198,10 +286,13 @@ def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, co
         pass_meta = []
         with torch.no_grad():
             for batch in tqdm.tqdm(loader, desc=f"TTA pass {pass_idx + 1}/{n_passes}"):
-                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
+                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
                 answer_tokens = answer_tokens.to(device)
-                cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
-                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
+                conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
+                cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
+                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices,
+                                           conclusion_start=cs, conclusion_only=configs.get("conclusion_only_loss", False),
+                                           conclusion_loss_weight=conclusion_weight)
                 max_new_tokens = configs["max_new_tokens"][question_type[0]]
                 llm_dtype = model.llm.get_input_embeddings().weight.dtype
                 generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
@@ -379,13 +470,31 @@ def train(configs, exp_name, g):
     max_frames = configs.get("max_frames", 5)
     if configs["train"]:
         train_dataset = TactileLLMDataset(image_processor, configs["train_files"], split_name="train", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames,
-            rotation_degrees=configs.get("rotation_degrees", 0), color_jitter=configs.get("color_jitter", 0.0), gaussian_blur=configs.get("gaussian_blur", False))
-        train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
+            rotation_degrees=configs.get("rotation_degrees", 0), color_jitter=configs.get("color_jitter", 0.0), gaussian_blur=configs.get("gaussian_blur", False),
+            pom_candidate_permutation_augmentation=configs.get("pom_candidate_permutation_augmentation", 0),
+            multi_object_slot_permutation_augmentation=configs.get("multi_object_slot_permutation_augmentation", 0),
+            multi_object_label_order_permutation_augmentation=configs.get("multi_object_label_order_permutation_augmentation", 0),
+            pom_option_id_format=configs.get("pom_option_id_format", False))
+        if configs.get("task_balanced_training", False):
+            if configs["per_device_train_batch_size"] != 1:
+                raise ValueError("task_balanced_training currently expects per_device_train_batch_size=1")
+            task_sampler = TaskBalancedSampler(
+                train_dataset,
+                accumulation_steps=configs["llm_gradient_accumulation_steps"],
+                seed=configs.get("seed", 0),
+            )
+            group_counts = {name: len(indices) for name, indices in task_sampler.groups.items()}
+            print(f"Task-balanced training enabled: groups={group_counts}, per_group_per_update={task_sampler.per_group}")
+            train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], sampler=task_sampler, worker_init_fn=seed_worker, generator=g)
+        else:
+            train_loader = DataLoader(train_dataset, batch_size=configs["per_device_train_batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
     if configs["val"]:
-        val_dataset = TactileLLMDataset(image_processor, configs["val_files"], split_name="val", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
+        val_dataset = TactileLLMDataset(image_processor, configs["val_files"], split_name="val", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames,
+            pom_option_id_format=configs.get("pom_option_id_format", False))
         val_loader = DataLoader(val_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
     if configs["test"]:
-        test_dataset = TactileLLMDataset(image_processor, configs["test_files"], split_name="test", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames)
+        test_dataset = TactileLLMDataset(image_processor, configs["test_files"], split_name="test", tokenizer=tokenizer, flip_p=configs["flip_p"], max_frames=max_frames,
+            pom_option_id_format=configs.get("pom_option_id_format", False))
         test_loader = DataLoader(test_dataset, batch_size=configs["per_device_val_batch_size"], shuffle=False, worker_init_fn=seed_worker, generator=g)
 
     # model instantiation
@@ -399,6 +508,9 @@ def train(configs, exp_name, g):
     if configs["gpu_config"] is not None:
         model.encoder.to(device)
         model.project.to(device)
+        model.consistency_hardness.to(device)
+        model.consistency_roughness.to(device)
+        model.consistency_texture.to(device)
     else:
         model.to(device)
 
@@ -494,6 +606,13 @@ def train(configs, exp_name, g):
         encoder_params = list(model.encoder.parameters())
 
     if configs["train"]:
+        consistency_params = []
+        consistency_enabled = configs.get("opd_consistency_loss_weight", 0.0) > 0
+        for module in [model.consistency_hardness, model.consistency_roughness, model.consistency_texture]:
+            for param in module.parameters():
+                param.requires_grad = consistency_enabled
+                if consistency_enabled:
+                    consistency_params.append(param)
         ## LLM optimizer
         llm_params = []
         if not configs["use_lora"]:
@@ -535,6 +654,7 @@ def train(configs, exp_name, g):
         print(f"len(llm_params): {len(llm_params)}")
         print(f"len(project_params): {len(project_params)}")
         print(f"len(encoder_params): {len(encoder_params)}")
+        print(f"len(consistency_params): {len(consistency_params)}")
 
         optimizer_grouped_parameters = []
         if len(llm_params) > 0:
@@ -551,6 +671,11 @@ def train(configs, exp_name, g):
             optimizer_grouped_parameters.append({
                 "params": encoder_params,
                 "lr": configs["encoder_lr"]
+            })
+        if len(consistency_params) > 0:
+            optimizer_grouped_parameters.append({
+                "params": consistency_params,
+                "lr": configs.get("opd_consistency_lr", configs["llm_lr"])
             })
 
         if len(optimizer_grouped_parameters) > 0:
@@ -600,10 +725,24 @@ def train(configs, exp_name, g):
         # total_train_loss = 0
         # NOTE: do not calculate stats during training to save time
         for train_sample_step, batch in enumerate(t:=tqdm.tqdm(train_loader)):
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
             answer_tokens = answer_tokens.to(device)
-            cs = conclusion_start if configs.get("conclusion_only_loss", False) else None
-            outputs, _ = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices, conclusion_start=cs)
+            conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
+            cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
+            consistency_weight = configs.get("opd_consistency_loss_weight", 0.0)
+            if not question_type[0].endswith("_object_property_description"):
+                consistency_weight = 0.0
+            outputs, _ = model(
+                question=question,
+                tactile_frames=tactile_frames,
+                answer_tokens=answer_tokens,
+                all_indices=all_indices,
+                conclusion_start=cs,
+                conclusion_only=configs.get("conclusion_only_loss", False),
+                conclusion_loss_weight=conclusion_weight,
+                property_labels=property_labels,
+                consistency_loss_weight=consistency_weight,
+            )
             train_loss = outputs.loss.detach().float()
             t.set_description(f"Train loss: {train_loss}")
             # total_train_loss += train_loss # NOTE: hardcoded for batch size of 1
@@ -630,16 +769,24 @@ def train(configs, exp_name, g):
             # validation
             if configs.get("val_freq") is not None and (train_sample_step + 1) % configs["val_freq"] == 0:
                 if configs["val"]:
-                    val_loss = evaluate_metrics(model, val_loader, device, tokenizer, configs)
+                    val_loss, balanced_val_loss = evaluate_metrics(model, val_loader, device, tokenizer, configs)
                     if configs["freeze_encoder"]:
                         model.encoder.eval()
                     if configs["freeze_projection"]:
                         model.project.eval()
                     print(f"Validation Loss: {val_loss}")
+                    checkpoint_metric = val_loss
+                    checkpoint_metric_name = "validation loss"
+                    if configs.get("val_checkpoint_metric", "loss") == "balanced_task_loss":
+                        if balanced_val_loss is None:
+                            print("Balanced validation loss unavailable; falling back to sample-weighted validation loss.")
+                        else:
+                            checkpoint_metric = balanced_val_loss
+                            checkpoint_metric_name = "balanced validation loss"
                     
-                    if val_loss < best_val_loss:
-                        print(f"New best validation loss: {val_loss:.4f} (previous: {best_val_loss:.4f})")
-                        best_val_loss = val_loss
+                    if checkpoint_metric < best_val_loss:
+                        print(f"New best {checkpoint_metric_name}: {checkpoint_metric:.4f} (previous: {best_val_loss:.4f})")
+                        best_val_loss = checkpoint_metric
                         current_step = train_sample_step + 1
                         print(f"Saving BEST checkpoint at step {current_step}...")
                         model.llm.generation_config.temperature = None
@@ -655,24 +802,31 @@ def train(configs, exp_name, g):
                         tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
             if (train_sample_step + 1) >= configs["max_train_steps"]:
                 break
-        # if not configs["val"]:
-        #     # Save models
-        #     print(f"\nNo validation during training. Saving final tokenizer and models...")
-        #     tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
-        #     model.llm.generation_config.temperature = None
-        #     model.llm.generation_config.top_p = None
-        #     if len(llm_params) > 0:
-        #         if configs["use_lora"]:
-        #             model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/llm_weights")
-        #         else:
-        #             torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/llm_weights.pt")
-        #     if not configs["freeze_encoder"]:
-        #         torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/encoder.pt")
-        #     torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/project.pt")
+        print(f"\nSaving FINAL checkpoint after training...")
+        tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
+        model.llm.generation_config.temperature = None
+        model.llm.generation_config.top_p = None
+        if len(llm_params) > 0:
+            if configs["use_lora"]:
+                model.llm.save_pretrained(f"{configs['exps_path']}/{exp_name}/final_llm_weights")
+            else:
+                torch.save({n: p for n, p in model.llm.named_parameters() if p.requires_grad}, f"{configs['exps_path']}/{exp_name}/final_llm_weights.pt")
+        torch.save(model.project.state_dict(), f"{configs['exps_path']}/{exp_name}/final_project.pt")
+        if not configs["freeze_encoder"]:
+            torch.save(model.encoder.state_dict(), f"{configs['exps_path']}/{exp_name}/final_encoder.pt")
         print(f"LLM training done!")
 
     # test
     if configs["test"]:
+        if configs["train"]:
+            print(f"\n=========================================")
+            print(f"Evaluating FINAL checkpoint for testing...")
+            print(f"=========================================")
+            model.eval()
+            run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_final")
+            if configs.get("use_lora", False) and configs.get("tta_passes", 1) > 1:
+                run_evaluation_tta(model, configs["test_files"], image_processor, device, tokenizer, configs, exp_name, "test_final")
+
         if configs["train"] and configs["val"] and configs.get("val_freq") is not None:
             print(f"\n=========================================")
             print(f"Loading best checkpoint for testing...")
@@ -728,7 +882,7 @@ def train(configs, exp_name, g):
 
 if __name__ == "__main__":
     exp_type = f"train_llm"
-    config_path = f'configs/{exp_type}_config.yaml'
+    config_path = os.environ.get("TRAIN_LLM_CONFIG", f'configs/{exp_type}_config.yaml')
     # get configs
     with open(config_path, 'r') as file:
         configs = yaml.safe_load(file)

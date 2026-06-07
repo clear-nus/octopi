@@ -22,43 +22,39 @@ dim_context_vision: 1024
 num_context_text: 4
 prompt_depth_text: 12
 dim_context_text: 768
-freeze_projection: false
-projection_lr: 0.0002
-projection_path: exps/2026_06_01_19_11_15_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_frames8enc_fullloss_stage1/best_project.pt
+freeze_projection: true
+projection_lr: 2.0e-05
+projection_path: exps/2026_06_02_11_37_05_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0_frames8enc_fullloss_stage1_8000_paperaligned/best_project.pt
 train_files:
-- /data/samson/octopi/data/train_qa.json
+- /tmp/octopi_llm_frames8_encoder_full_stage12_data/train_qa.json
 val_files:
-- /data/samson/octopi/data/val_opd_qa.json
-- /data/samson/octopi/data/val_qa.json
+- /tmp/octopi_llm_frames8_encoder_full_stage12_data/val_opd_qa.json
+- /tmp/octopi_llm_frames8_encoder_full_stage12_data/val_qa.json
 test_files:
-- /data/samson/octopi/data/test_opd_qa.json
-- /data/samson/octopi/data/test_qa.json
+- /tmp/octopi_llm_frames8_encoder_full_stage12_data/test_opd_qa.json
+- /tmp/octopi_llm_frames8_encoder_full_stage12_data/test_qa.json
 model_type: vicuna-7b
 cutoff_len: 512
 offload_dir: ./
-llm_lr: 0.0002
+llm_lr: 0.0001
 quantized: false
-tokenizer_path: exps/2026_06_01_19_11_15_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_frames8enc_fullloss_stage1/tokenizer
-llm_path: exps/2026_06_01_19_11_15_train_llm_train_val_test_vicuna-7b_3200_full_pipeline_0_frames8enc_fullloss_stage1/best_llm_weights.pt
+tokenizer_path: exps/2026_06_02_11_37_05_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0_frames8enc_fullloss_stage1_8000_paperaligned/tokenizer
+llm_path: exps/2026_06_02_11_37_05_train_llm_train_val_test_vicuna-7b_8000_full_pipeline_0_frames8enc_fullloss_stage1_8000_paperaligned/best_llm_weights.pt
 lora_trained: false
 use_lora: true
-lora_alpha: 128
+lora_alpha: 256
 r: 128
 lora_dropout: 0.05
 target_modules:
 - q_proj
-- v_proj
 - k_proj
-- o_proj
-- gate_proj
-- up_proj
-- down_proj
 modules_to_save:
 - embed_tokens
 bias: none
 max_train_steps: 3000
 per_device_train_batch_size: 1
 llm_gradient_accumulation_steps: 16
+task_balanced_training: false
 warmup_steps: 20
 val_freq: 150
 val_subset_size: null
@@ -78,3 +74,11 @@ max_new_tokens:
   eval_property_superlative_selection_least: 200
   eval_property_object_match: 200
   eval_property_scenario_reasoning: 200
+opd_consistency_loss_weight: 0.05
+opd_consistency_lr: 0.0001
+pom_conclusion_loss_weight: null
+conclusion_loss_task_groups: null
+pom_option_id_format: false
+pom_candidate_permutation_augmentation: 0
+multi_object_slot_permutation_augmentation: 0
+multi_object_label_order_permutation_augmentation: 0

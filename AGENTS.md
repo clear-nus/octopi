@@ -1,5 +1,16 @@
 # Repository Guidelines
 
+## Current Live Notes (2026-06-07)
+- Active LLM run: tmux `octopi_llm_depth24_stage1_stage2_gpu5_now`, log `queue_llm_depth24_stage1_stage2_gpu5_now.log`. It runs Stage 1 then Stage 2 on GPU 5 using the depth-24 seed-0 encoder `exps/2026_06_07_15_08_20_train_clip_clip_seed_0_repro_sorted_valmean_ema098_frames8_depth24_gpu0/encoder.pt`.
+- The previous GPU-5 LoRA run and the queued LR-2e-4 qkv/qk ablations were intentionally stopped to prioritize this depth-24 Stage 1+2 run.
+- Depth-24 CLIP seed sweep is still/was running in tmux `octopi_clip_frames8_depth24_gpu0`, log `queue_clip_frames8_depth24_gpu0.log`, script `scripts/queue_clip_frames8_depth24_seed_reps_gpu0.sh`. It matches the finalized 8-frame encoder config except `prompt_depth_vision=24`.
+- Depth-24 Stage 1 config: `prompt_depth_vision=24`, `max_frames=8`, full answer loss, no LoRA, 8000 steps, frozen encoder, train projection and new token embeddings, `projection_lr=2e-5`, `llm_lr=2e-5`, no validation/test.
+- Depth-24 Stage 2 config currently queued/running: `prompt_depth_vision=24`, q/k/v LoRA, train projector, 3000 steps, `projection_lr=2e-5`, `llm_lr=1e-4`, LoRA `r=128`, `alpha=256`, dropout `0.05`, reasoning conclusion loss `0.25`, POM conclusion loss `0.5`, OPD consistency `0.02`.
+- Paper LR reference: Stage 1 projection LR `2e-5`; Stage 2 projection LR `2e-5`; Stage 2 LLM/LoRA LR `2e-4`; CLIP LR `1e-3`.
+- Released GitHub README/config reference: Stage 2 uses `llm_lr=2e-4`, `projection_lr=2e-4`, and LoRA target modules `q_proj,k_proj`. The paper explicitly says Stage 2 projection LR is `2e-5`, so treat `projection_lr=2e-5` as the more paper-grounded choice.
+- Current depth-24 Stage 2 is **not fully paper-aligned**: LoRA LR is `1e-4` instead of paper/GitHub `2e-4`; LoRA targets are q/k/v instead of released README q/k; extra conclusion/consistency losses are enabled; warmup `50` is an engineering choice.
+- Important optimizer finding: `src/train_llm.py` currently constructs `torch.optim.AdamW(optimizer_grouped_parameters)` without `weight_decay=0.0`, so PyTorch default weight decay `0.01` applies to LLM optimizer groups. This does **not** match the paper's "no weight decay" statement. Fix/restart is needed for strict paper alignment.
+
 ## Current Experiment Decisions (2026-06-01)
 Latest live status:
 - CLIP 8-frame/no-top-k seed repeat completed via tmux `octopi_clip_frames8_notopk`, log `queue_clip_frames8_notopk.log`, script `scripts/queue_clip_frames8_notopk_seed_reps.sh`. It is now the preferred performance-oriented encoder direction: `max_frames=8`, `top_k_val_checkpoints=1`, 30 epochs, LR `3e-4`, no smoothing/ranking/weight decay, scaled class-balanced CE, decoupled heads, and EMA `0.98`.

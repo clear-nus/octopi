@@ -1,5 +1,27 @@
 # Octopi: Object Property Reasoning with Large Tactile-Language Models
 
+## Current Reproduction Notes (2026-06-07)
+
+Current depth-24 encoder ablation:
+- CLIP seed-0 depth-24 encoder: `exps/2026_06_07_15_08_20_train_clip_clip_seed_0_repro_sorted_valmean_ema098_frames8_depth24_gpu0/encoder.pt`.
+- Depth-24 CLIP seed sweep script/log: `scripts/queue_clip_frames8_depth24_seed_reps_gpu0.sh`, `queue_clip_frames8_depth24_gpu0.log`.
+- LLM Stage 1+2 depth-24 queue/run: `octopi_llm_depth24_stage1_stage2_gpu5_now`, log `queue_llm_depth24_stage1_stage2_gpu5_now.log`.
+
+Paper LR reference:
+
+| Component | Paper LR | Current depth-24 run |
+|---|---:|---:|
+| CLIP encoder/classifier | `1e-3` | `3e-4` |
+| Stage 1 projection | `2e-5` | `2e-5` |
+| Stage 1 trainable token embeddings | implied with Stage 1 trainables | `2e-5` |
+| Stage 2 projection | `2e-5` | `2e-5` |
+| Stage 2 LoRA/LLM | `2e-4` | `1e-4` |
+
+Known alignment caveats:
+- The current depth-24 Stage 2 run is not fully paper-aligned: it uses q/k/v LoRA targets, `llm_lr=1e-4`, train-projector Stage 2, conclusion/consistency auxiliary losses, and warmup `50`.
+- The released README/config lists Stage 2 `llm_lr=2e-4`, `projection_lr=2e-4`, and q/k LoRA targets. The RSS paper explicitly lists Stage 2 projection LR `2e-5` and LLM LR `2e-4`.
+- `src/train_llm.py` currently creates `torch.optim.AdamW(...)` without passing `weight_decay=0.0`, so the PyTorch default `0.01` applies. This does not match the paper's no-weight-decay statement and should be fixed for a strict paper-aligned rerun.
+
 [![preprint](https://img.shields.io/static/v1?label=arXiv&message=2405.02794&color=B31B1B)](https://arxiv.org/abs/2405.02794)
 ![Venue:RSS 2024](https://img.shields.io/badge/Venue-RSS%202024-007CFF)
 

@@ -128,6 +128,9 @@ class MultimodalLLMForCausalLM(nn.Module):
             nn.LayerNorm(self.llm_embedding_size),
             nn.Linear(self.llm_embedding_size, self.llm_embedding_size),
         )
+        self.consistency_hardness = nn.Linear(self.llm_embedding_size, 3)
+        self.consistency_roughness = nn.Linear(self.llm_embedding_size, 3)
+        self.consistency_texture = nn.Linear(self.llm_embedding_size, 3)
 
     def get_dummy_token(self, answer_embeds, question_embeds_len):
         batch_size = answer_embeds.shape[0]
@@ -138,7 +141,9 @@ class MultimodalLLMForCausalLM(nn.Module):
         post_label_token = torch.full((batch_size, self.cutoff_len - (question_embeds_len + answer_embeds_len + index_shift)), fill_value=-100, dtype=torch.int64, device=self.device)
         return pre_label_token, post_label_token
 
-    def forward(self, question, tactile_frames, answer_tokens, all_indices, images=None, conclusion_start=None):
+    def forward(self, question, tactile_frames, answer_tokens, all_indices, images=None, conclusion_start=None,
+                conclusion_only=False, conclusion_loss_weight=0.0,
+                property_labels=None, consistency_loss_weight=0.0):
         # 1) question embeds
         question_embeds = []
         img_token_count = 0
@@ -192,11 +197,11 @@ class MultimodalLLMForCausalLM(nn.Module):
         llm_dtype = self.llm.get_input_embeddings().weight.dtype
         input_embeds = torch.cat((question_embeds, answer_embeds, padding_embeds), dim=1).to(llm_dtype)
         pre_label_dummy_token, post_label_dummy_token = self.get_dummy_token(answer_embeds, question_embeds_len)
-        # Outcome supervision: mask description tokens, only backprop through conclusion.
-        # conclusion_start=0 means no mask (OPD has no "Conclusion:" so full loss applies).
+        # Outcome supervision can either train only on conclusion tokens, or keep the
+        # full answer loss and add an extra conclusion-region loss.
         if conclusion_start is not None:
             cs = int(conclusion_start[0].item() if torch.is_tensor(conclusion_start) else conclusion_start)
-            if cs > 0:
+            if conclusion_only and cs > 0:
                 answer_labels = answer_tokens.clone()
                 answer_labels[:, :cs] = -100
             else:
@@ -208,10 +213,46 @@ class MultimodalLLMForCausalLM(nn.Module):
         attention_mask = torch.cat((torch.ones([batch_size, full_embeds_len]), torch.zeros([batch_size, padding_embeds.shape[1]])), dim=1).to(llm_device)
         seq_len = input_embeds.shape[1]
         position_ids = torch.arange(0, seq_len, dtype=torch.long, device=llm_device).unsqueeze(0).expand(batch_size, -1)
-        raw_out = self.llm(inputs_embeds=input_embeds, attention_mask=attention_mask, position_ids=position_ids)
+        use_consistency = property_labels is not None and consistency_loss_weight > 0
+        raw_out = self.llm(
+            inputs_embeds=input_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            output_hidden_states=use_consistency,
+        )
         logits = raw_out.logits.float()
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous().to(shift_logits.device)
         loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=-100)
+        if conclusion_start is not None and conclusion_loss_weight > 0:
+            cs = int(conclusion_start[0].item() if torch.is_tensor(conclusion_start) else conclusion_start)
+            if cs > 0:
+                conclusion_answer_labels = answer_tokens.clone()
+                conclusion_answer_labels[:, :cs] = -100
+                conclusion_labels = torch.cat(
+                    (
+                        pre_label_dummy_token.to(llm_device),
+                        conclusion_answer_labels,
+                        post_label_dummy_token.to(llm_device)
+                    ),
+                    dim=1
+                )
+                conclusion_shift_labels = conclusion_labels[..., 1:].contiguous().to(shift_logits.device)
+                conclusion_loss = F.cross_entropy(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    conclusion_shift_labels.view(-1),
+                    ignore_index=-100
+                )
+                loss = loss + conclusion_loss_weight * conclusion_loss
+        if use_consistency:
+            property_labels = property_labels.to(logits.device)
+            valid = property_labels[:, 0] >= 0
+            if valid.any():
+                summary = raw_out.hidden_states[-1][:, question_embeds_len - 1, :].float()
+                hardness_loss = F.cross_entropy(self.consistency_hardness(summary)[valid], property_labels[:, 0][valid])
+                roughness_loss = F.cross_entropy(self.consistency_roughness(summary)[valid], property_labels[:, 1][valid])
+                texture_loss = F.cross_entropy(self.consistency_texture(summary)[valid], property_labels[:, 2][valid])
+                consistency_loss = (hardness_loss + roughness_loss + texture_loss) / 3.0
+                loss = loss + consistency_loss_weight * consistency_loss
         out = CausalLMOutputWithPast(loss=loss, logits=logits)
         return out, question_embeds

@@ -1,5 +1,7 @@
 import json
 import argparse
+import re
+from difflib import SequenceMatcher
 
 
 class LLMEvaluator:
@@ -42,6 +44,14 @@ class LLMEvaluator:
                         "num": 0,
                         "accuracy": 0
                     }
+            elif question_type == "eval_property_object_match":
+                self.results[question_type] = {
+                    "num": 0,
+                    "accuracy": 0,
+                    "slot_accuracy": 0,
+                    "canonical_accuracy": 0,
+                    "canonical_slot_accuracy": 0
+                }
             else:
                 self.results[question_type] = {
                     "num": 0,
@@ -64,13 +74,18 @@ class LLMEvaluator:
         elif question_type == "eval_property_object_match":
             if show_pom and show_question:
                 print("\n\n" + question)
-            result = self.evaluate_pom(generation, answer, show_pom)
+            result = self.evaluate_pom(question, generation, answer, show_pom)
         if result is not None:
             if question_type == "eval_object_property_description":
                 self.results[question_type]["hardness_accuracy"] += result[0]
                 self.results[question_type]["roughness_accuracy"] += result[1]
                 self.results[question_type]["texture_accuracy"] += result[2]
                 self.results[question_type]["combined_accuracy"] += result[3]
+            elif question_type == "eval_property_object_match" and isinstance(result, tuple):
+                self.results[question_type]["accuracy"] += result[0]
+                self.results[question_type]["slot_accuracy"] += result[1]
+                self.results[question_type]["canonical_accuracy"] += result[2]
+                self.results[question_type]["canonical_slot_accuracy"] += result[3]
             else:
                 self.results[question_type]["accuracy"] += result
             self.results[question_type]["num"] += 1
@@ -122,15 +137,99 @@ class LLMEvaluator:
         else:
             return 0
     
-    def evaluate_pom(self, generation, answer, show):
+    def evaluate_pom(self, question, generation, answer, show):
         answer = answer.split("Conclusion: ")[-1]
         answer_len = len(answer)
         if show:
             print("\nPOM:", generation, "||", answer)
-        if generation.split("Conclusion: ")[-1][:answer_len] == answer:
-            return 1
-        else:
-            return 0
+        generation = generation.split("Conclusion: ")[-1]
+        full_correct = 1 if generation[:answer_len] == answer else 0
+        slot_correct = 0
+        canonical_full_correct = 0
+        canonical_slot_correct = 0
+        answer_slots = self.parse_pom_slots(answer)
+        generation_slots = self.parse_pom_slots(generation)
+        if answer_slots is not None and generation_slots is not None:
+            slot_correct = sum(1 for key in answer_slots if answer_slots[key] == generation_slots.get(key)) / 3
+            candidate_names = self.parse_pom_candidates(question)
+            if candidate_names:
+                answer_canonical = {
+                    key: self.canonicalize_pom_object(value, candidate_names)
+                    for key, value in answer_slots.items()
+                }
+                generation_canonical = {
+                    key: self.canonicalize_pom_object(value, candidate_names)
+                    for key, value in generation_slots.items()
+                }
+                if all(answer_canonical.get(key) is not None for key in ["a", "b", "c"]):
+                    canonical_slot_correct = sum(
+                        1 for key in answer_canonical
+                        if answer_canonical[key] == generation_canonical.get(key)
+                    ) / 3
+                    canonical_full_correct = 1 if canonical_slot_correct == 1 else 0
+        return full_correct, slot_correct, canonical_full_correct, canonical_slot_correct
+
+    def parse_pom_slots(self, text):
+        text = text.replace("</s>", "").strip()
+        pattern = re.compile(
+            r"([abc])\)\s*(?:is\s*)?(.*?)(?=(?:,\s*[abc]\)|\s+and\s+[abc]\)|\.?\s*$))",
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        slots = {}
+        for match in pattern.finditer(text):
+            slots[match.group(1).lower()] = self.clean_pom_slot_value(match.group(2))
+        if any(label not in slots for label in ["a", "b", "c"]):
+            return None
+        return slots
+
+    def clean_pom_slot_value(self, text):
+        text = text.replace("</s>", "").strip(" ,.")
+        text = re.sub(r"^\s*is\s+", "", text, flags=re.IGNORECASE)
+        return text.strip(" ,.")
+
+    def normalize_object_name(self, text):
+        text = text.replace("</s>", "").lower()
+        text = re.sub(r"[_\-/]+", " ", text)
+        text = re.sub(r"[^a-z0-9 ]+", " ", text)
+        text = re.sub(r"\b(the|a|an|object|option)\b", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def parse_pom_candidates(self, question):
+        if isinstance(question, list):
+            question = "".join([q[0] if isinstance(q, tuple) else str(q) for q in question])
+        candidates = []
+        for match in re.finditer(r"(?:^|[\s:])([123])\)\s*([^,\.]+)", question):
+            candidate = match.group(2).strip()
+            if candidate:
+                candidates.append(candidate)
+        return candidates if len(candidates) == 3 else []
+
+    def canonicalize_pom_object(self, text, candidates):
+        option_match = re.search(r"\b(?:option\s*)?([123])\b", text.lower())
+        if option_match is not None:
+            option_idx = int(option_match.group(1)) - 1
+            if 0 <= option_idx < len(candidates):
+                return candidates[option_idx]
+        text_norm = self.normalize_object_name(text)
+        if not text_norm:
+            return None
+        candidate_norms = [self.normalize_object_name(candidate) for candidate in candidates]
+        for candidate, candidate_norm in zip(candidates, candidate_norms):
+            if text_norm == candidate_norm:
+                return candidate
+        for candidate, candidate_norm in zip(candidates, candidate_norms):
+            if candidate_norm and (candidate_norm in text_norm or text_norm in candidate_norm):
+                return candidate
+        scores = [
+            SequenceMatcher(None, text_norm, candidate_norm).ratio()
+            for candidate_norm in candidate_norms
+        ]
+        best_idx = max(range(len(scores)), key=lambda idx: scores[idx])
+        sorted_scores = sorted(scores, reverse=True)
+        if sorted_scores[0] >= 0.86 and sorted_scores[0] - sorted_scores[1] >= 0.08:
+            return candidates[best_idx]
+        return None
 
 
 random_scores = {
@@ -138,7 +237,10 @@ random_scores = {
         "accuracy": 0.333
     },
     "eval_property_object_match": {
-        "accuracy": 0.167
+        "accuracy": 0.167,
+        "slot_accuracy": 0.333,
+        "canonical_accuracy": 0.167,
+        "canonical_slot_accuracy": 0.333
     },
     "eval_property_superlative_selection": {
         "accuracy": 0.333

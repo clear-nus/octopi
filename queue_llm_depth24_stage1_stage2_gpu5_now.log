@@ -1,0 +1,51 @@
+[llm-depth24-stage1-stage2] queued Sun Jun  7 04:25:18 PM UTC 2026
+[llm-depth24-stage1-stage2] waiting for tmux session __none__
+[llm-depth24-stage1-stage2] start Sun Jun  7 04:25:18 PM UTC 2026
+[llm-depth24-stage1-stage2] seed=0
+[llm-depth24-stage1-stage2] stage1_cuda=5 stage2_cuda=5
+[llm-depth24-stage1-stage2] encoder=exps/2026_06_07_15_08_20_train_clip_clip_seed_0_repro_sorted_valmean_ema098_frames8_depth24_gpu0/encoder.pt
+[llm-depth24-stage1-stage2] data=/tmp/octopi_llm_frames8_encoder_full_stage12_data
+[llm-depth24-stage1-stage2] run_tag=depth24enc_gpu5_now
+[llm-depth24-stage1-stage2] Stage 1: full answer loss, no LoRA, train-only, 8000 steps
+Updated data_dir to /tmp/octopi_llm_frames8_encoder_full_stage12_data
+Updated train_files to ['/tmp/octopi_llm_frames8_encoder_full_stage12_data/train_qa.json']
+Updated val_files to ['/tmp/octopi_llm_frames8_encoder_full_stage12_data/val_opd_qa.json', '/tmp/octopi_llm_frames8_encoder_full_stage12_data/val_qa.json']
+Updated test_files to ['/tmp/octopi_llm_frames8_encoder_full_stage12_data/test_opd_qa.json', '/tmp/octopi_llm_frames8_encoder_full_stage12_data/test_qa.json']
+Updated seed to 0
+Updated cuda to 5
+Updated gpu_config to configs/gpu_config_7b_gpu5.json
+Updated encoder_path to exps/2026_06_07_15_08_20_train_clip_clip_seed_0_repro_sorted_valmean_ema098_frames8_depth24_gpu0/encoder.pt
+Updated max_frames to 8
+Updated num_context_vision to 8
+Updated prompt_depth_vision to 24
+Updated use_lora to False
+Updated lora_trained to False
+Updated max_train_steps to 8000
+Updated val_freq to None
+Updated val_checkpoint_metric to loss
+Updated projection_path to None
+Updated tokenizer_path to None
+Updated llm_path to None
+Updated exps_path to exps
+Updated freeze_encoder to True
+Updated freeze_projection to False
+Updated modules_to_save to ['embed_tokens']
+Updated projection_lr to 2e-05
+Updated llm_lr to 2e-05
+Updated warmup_steps to 20
+Updated llm_gradient_accumulation_steps to 16
+Updated task_balanced_training to False
+Updated conclusion_only_loss to False
+Updated conclusion_loss_weight to 0.0
+Updated conclusion_loss_task_groups to None
+Updated pom_conclusion_loss_weight to None
+Updated pom_option_id_format to False
+Updated pom_candidate_permutation_augmentation to 0
+Updated multi_object_slot_permutation_augmentation to 0
+Updated multi_object_label_order_permutation_augmentation to 0
+Updated opd_consistency_loss_weight to 0.0
+Updated opd_consistency_lr to 0.0001
+Updated train to True
+Updated val to False
+Updated test to False
+Updated tta_passes to 1
