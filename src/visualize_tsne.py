@@ -120,7 +120,7 @@ def main():
     all_roughness = []
     all_texture = []
     for i in range(len(val_dataset)):
-        _, h, r, t, _ = val_dataset.get_frames_and_label(i, None)
+        _, h, r, t, _, _ = val_dataset.get_frames_and_label(i, None)
         all_hardness.append(h)
         all_roughness.append(r)
         all_texture.append(t)

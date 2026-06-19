@@ -1,1 +1,0 @@
-[frames8-depth24-gpu0] seed=0 clip_seed_0_repro_sorted_valmean_ema098_frames8_depth24_gpu0 :: val_mean=0.5833333333333334 test_mean=0.7543859649122807 test_combined=0.47368421052631576

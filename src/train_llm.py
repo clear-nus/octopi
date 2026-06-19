@@ -17,7 +17,7 @@ import random
 import yaml
 from datetime import datetime
 import sys
-from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup
+from transformers import CLIPImageProcessor, get_cosine_schedule_with_warmup, get_constant_schedule_with_warmup
 from transformers.utils import logging
 from evaluate_llm import LLMEvaluator, random_scores
 
@@ -32,18 +32,6 @@ def llm_task_group(question_type):
     if "property_superlative_selection" in question_type:
         return "pss"
     return "other"
-
-
-def get_conclusion_loss_weight(configs, question_type):
-    global_weight = configs.get("conclusion_loss_weight", 0.0)
-    pom_weight = configs.get("pom_conclusion_loss_weight", None)
-    task_groups = configs.get("conclusion_loss_task_groups", None)
-    task_group = llm_task_group(question_type)
-    if task_groups is not None and task_group not in task_groups:
-        return 0.0
-    if pom_weight is not None and task_group == "pom":
-        return pom_weight
-    return global_weight
 
 
 class TaskBalancedSampler(Sampler):
@@ -98,16 +86,48 @@ def write_llm_results(results, path):
                     f.write(f"\t{stat}: {value}\n")
 
 
-def add_new_tokens(llm, tokenizer, new_tokens):
+def _delimiter_init_source(token):
+    # Map a tactile delimiter token to the real vocab word(s) whose embedding(s) it
+    # should be initialized from, so the markers START meaningful/separated instead of
+    # all collapsing to the (small, identical) mean-of-vocab vector.
+    #   <tact_start> -> ["start"], <tact_end> -> ["end"]
+    #   <tact_start_a> -> ["start", "a"], <tact_end_b> -> ["end", "b"], ...
+    m = re.match(r"<tact_(start|end)(?:_([a-z]))?>", token)
+    if m is None:
+        return None
+    parts = [m.group(1)]
+    if m.group(2):
+        parts.append(m.group(2))
+    return parts
+
+
+def add_new_tokens(llm, tokenizer, new_tokens, smart_init=False):
     new_tokens = list(set(new_tokens) - set(tokenizer.vocab.keys()))
     if len(new_tokens) == 0:
         return
     n_new_tokens = tokenizer.add_tokens(new_tokens)
     print(f"{n_new_tokens} tokens added to tokenizer.")
     llm.resize_token_embeddings(len(tokenizer))
+    emb = llm.model.embed_tokens.weight
     with torch.no_grad():
-        input_embeddings_avg = llm.model.embed_tokens.weight[:-n_new_tokens].mean(axis=0, keepdim=True)
-        llm.model.embed_tokens.weight[-n_new_tokens:] = input_embeddings_avg
+        input_embeddings_avg = emb[:-n_new_tokens].mean(axis=0, keepdim=True)
+        emb[-n_new_tokens:] = input_embeddings_avg
+        if smart_init:
+            # Seed delimiter tokens from real word embeddings (e.g. <tact_start_a> from
+            # mean of "start" and "a"); leaves any non-delimiter new token at the mean.
+            for tok in new_tokens:
+                src = _delimiter_init_source(tok)
+                if src is None:
+                    continue
+                vecs = []
+                for s in src:
+                    ids = tokenizer.encode(s, add_special_tokens=False)
+                    if len(ids) > 0:
+                        vecs.append(emb[ids].mean(0))
+                if vecs:
+                    tid = tokenizer.convert_tokens_to_ids(tok)
+                    emb[tid] = torch.stack(vecs).mean(0)
+                    print(f"  smart-init {tok} <- {src}")
 
 
 def evaluate_metrics(model, val_loader, device, tokenizer, configs):
@@ -138,13 +158,9 @@ def evaluate_metrics(model, val_loader, device, tokenizer, configs):
         for i, batch in enumerate(tqdm.tqdm(val_loader, desc="Evaluating metrics")):
             if val_subset_size is not None and i >= val_subset_size:
                 break
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
             answer_tokens = answer_tokens.to(device)
-            conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
-            cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
-            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices,
-                                             conclusion_start=cs, conclusion_only=configs.get("conclusion_only_loss", False),
-                                             conclusion_loss_weight=conclusion_weight)
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
             val_loss_total += outputs.loss.item()
             val_steps += 1
             task = question_type[0]
@@ -203,13 +219,9 @@ def run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, fil
             if configs.get("val_subset_size") is not None and test_sample_step >= configs["val_subset_size"]:
                 break
             # NOTE: hardcoded for batch size of 1
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
             answer_tokens = answer_tokens.to(device)
-            conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
-            cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
-            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices,
-                                             conclusion_start=cs, conclusion_only=configs.get("conclusion_only_loss", False),
-                                             conclusion_loss_weight=conclusion_weight)
+            outputs, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
             max_new_tokens = configs["max_new_tokens"][question_type[0]]
             llm_dtype = model.llm.get_input_embeddings().weight.dtype
             generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
@@ -286,13 +298,9 @@ def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, co
         pass_meta = []
         with torch.no_grad():
             for batch in tqdm.tqdm(loader, desc=f"TTA pass {pass_idx + 1}/{n_passes}"):
-                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
+                question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
                 answer_tokens = answer_tokens.to(device)
-                conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
-                cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
-                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices,
-                                           conclusion_start=cs, conclusion_only=configs.get("conclusion_only_loss", False),
-                                           conclusion_loss_weight=conclusion_weight)
+                _, question_embeds = model(question=question, tactile_frames=tactile_frames, answer_tokens=answer_tokens, all_indices=all_indices)
                 max_new_tokens = configs["max_new_tokens"][question_type[0]]
                 llm_dtype = model.llm.get_input_embeddings().weight.dtype
                 generation_tokens = model.llm.generate(inputs_embeds=question_embeds.to(llm_dtype), max_new_tokens=max_new_tokens, temperature=None)
@@ -356,7 +364,10 @@ def run_evaluation_tta(model, test_files, image_processor, device, tokenizer, co
 def train(configs, exp_name, g):
     # device
     device = f'cuda:{configs["cuda"]}' # for inputs and model if not device_map
-    new_tokens = ['<tact_start>', '<tact_end>']
+    # Optionally add distinct per-slot delimiters (<tact_start_a>/<tact_end_a>, ...) so each
+    # video block has a unique, learnable address for multi-video binding (POM/PC/PSS).
+    delim_slot_tokens = sum([[f'<tact_start_{s}>', f'<tact_end_{s}>'] for s in ['a', 'b', 'c']], []) if configs.get("distinct_delimiters", False) else []
+    new_tokens = ['<tact_start>', '<tact_end>'] + delim_slot_tokens
 
     # load tokenizer and LLM weights
     if configs["model_type"] == "vicuna-7b":
@@ -411,7 +422,7 @@ def train(configs, exp_name, g):
             if len(tokenizer) > llm.get_input_embeddings().weight.shape[0]:
                 llm.resize_token_embeddings(len(tokenizer))
             # reference: https://jaotheboss.medium.com/domain-training-your-llm-6c77f53e3e27
-            add_new_tokens(llm, tokenizer, new_tokens)
+            add_new_tokens(llm, tokenizer, new_tokens, smart_init=configs.get("smart_delimiter_init", False))
             if configs["quantized"]:
                 llm = PeftModel.from_pretrained(model=llm, model_id=configs["llm_path"], is_trainable=False, device_map="auto", max_memory=gpu_max_mem_config, quantization_config=bnb_config)
             else:
@@ -434,8 +445,8 @@ def train(configs, exp_name, g):
                 llm.resize_token_embeddings(len(tokenizer))
 
             if configs["tokenizer_path"] is None:
-                new_tokens = ['<tact_start>', '<tact_end>']
-                add_new_tokens(llm, tokenizer, new_tokens)
+                new_tokens = ['<tact_start>', '<tact_end>'] + delim_slot_tokens
+                add_new_tokens(llm, tokenizer, new_tokens, smart_init=configs.get("smart_delimiter_init", False))
 
             if configs["llm_path"] is not None and configs["llm_path"].endswith(".pt"):
                 print(f"Loading LLM weights from {configs['llm_path']}...")
@@ -451,8 +462,8 @@ def train(configs, exp_name, g):
     # add new tokens
     if configs["tokenizer_path"] is None:
         # reference: https://jaotheboss.medium.com/domain-training-your-llm-6c77f53e3e27
-        new_tokens = ['<tact_start>', '<tact_end>']
-        add_new_tokens(llm, tokenizer, new_tokens)
+        new_tokens = ['<tact_start>', '<tact_end>'] + delim_slot_tokens
+        add_new_tokens(llm, tokenizer, new_tokens, smart_init=configs.get("smart_delimiter_init", False))
     tokenizer.save_pretrained(f"{configs['exps_path']}/{exp_name}/tokenizer")
 
     # load datasets
@@ -499,18 +510,15 @@ def train(configs, exp_name, g):
 
     # model instantiation
     if configs["lora_trained"]:
-        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm.model, device=device)
+        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm.model, device=device, pool_tactile_frames=configs.get("pool_tactile_frames", False), video_index_embedding=configs.get("video_index_embedding", False), distinct_delimiters=configs.get("distinct_delimiters", False))
     else:
-        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm, device=device)
+        model = MultimodalLLMForCausalLM(clip_model=configs["use_clip"], encoder_output_size=configs["encoder_output_size"], tokenizer=tokenizer, cutoff_len=configs["cutoff_len"], llm=llm, device=device, pool_tactile_frames=configs.get("pool_tactile_frames", False), video_index_embedding=configs.get("video_index_embedding", False), distinct_delimiters=configs.get("distinct_delimiters", False))
     
     # If using device_map (gpu_config present), we should not move the whole model to device
     # because the LLM parts are already placed. We only move the other modules.
     if configs["gpu_config"] is not None:
         model.encoder.to(device)
         model.project.to(device)
-        model.consistency_hardness.to(device)
-        model.consistency_roughness.to(device)
-        model.consistency_texture.to(device)
     else:
         model.to(device)
 
@@ -525,7 +533,9 @@ def train(configs, exp_name, g):
             bias=configs["bias"],
             inference_mode=False,
             task_type="CAUSAL_LM",
-            modules_to_save=configs["modules_to_save"],
+            # When freezing the new tactile token embeddings, do NOT create a
+            # trainable PEFT copy of embed_tokens (keep it at the loaded Stage-1 values).
+            modules_to_save=([] if configs.get("freeze_new_token_embeddings", False) else configs["modules_to_save"]),
         )
         llm_weights_path = f"{configs['exps_path']}/{exp_name}/llm_weights"
         if not os.path.exists(llm_weights_path):
@@ -606,30 +616,27 @@ def train(configs, exp_name, g):
         encoder_params = list(model.encoder.parameters())
 
     if configs["train"]:
-        consistency_params = []
-        consistency_enabled = configs.get("opd_consistency_loss_weight", 0.0) > 0
-        for module in [model.consistency_hardness, model.consistency_roughness, model.consistency_texture]:
-            for param in module.parameters():
-                param.requires_grad = consistency_enabled
-                if consistency_enabled:
-                    consistency_params.append(param)
         ## LLM optimizer
         llm_params = []
         if not configs["use_lora"]:
             for name, param in model.llm.named_parameters():
                 # NOTE: no lm_head here since they are not tied to word embeddings in LLaMA and no new tokens for generation
                 if "embed_tokens" in name:
-                    param.requires_grad = True
-                    # Only train new tokens
-                    def make_hook(n_old_tokens):
-                        def hook(grad):
-                            # Zero out gradients for the old tokens
-                            grad[:n_old_tokens] = 0
-                            return grad
-                        return hook
-                    # Register the hook
-                    n_old_tokens = len(tokenizer) - len(new_tokens)
-                    param.register_hook(make_hook(n_old_tokens))
+                    if configs.get("train_all_token_embeddings", False):
+                        # ORIGINAL octopi behavior: train the FULL embedding matrix (no masking).
+                        param.requires_grad = True
+                    else:
+                        param.requires_grad = True
+                        # Only train new tokens
+                        def make_hook(n_old_tokens):
+                            def hook(grad):
+                                # Zero out gradients for the old tokens
+                                grad[:n_old_tokens] = 0
+                                return grad
+                            return hook
+                        # Register the hook
+                        n_old_tokens = len(tokenizer) - len(new_tokens)
+                        param.register_hook(make_hook(n_old_tokens))
                 else:
                     param.requires_grad = False
                 if param.requires_grad:
@@ -638,23 +645,34 @@ def train(configs, exp_name, g):
             for name, param in model.llm.named_parameters():
                 # NOTE: no lm_head here since they are not tied to word embeddings in LLaMA and no new tokens for generation
                 if "embed_tokens" in name:
-                    param.requires_grad = True
-                    # Only train new tokens
-                    def make_hook(n_old_tokens):
-                        def hook(grad):
-                            # Zero out gradients for the old tokens
-                            grad[:n_old_tokens] = 0
-                            return grad
-                        return hook
-                    # Register the hook
-                    n_old_tokens = len(tokenizer) - len(new_tokens)
-                    param.register_hook(make_hook(n_old_tokens))
+                    if configs.get("freeze_new_token_embeddings", False):
+                        # Hold the <tact_start>/<tact_end> (and all) token embeddings fixed at
+                        # their Stage-1 values during LoRA, so the tactile boundary markers
+                        # don't drift while the LoRA learns to use the blocks.
+                        param.requires_grad = False
+                    elif configs.get("train_all_token_embeddings", False):
+                        # ORIGINAL octopi behavior: train the FULL embedding matrix during LoRA
+                        # (no gradient masking). Lets the model adjust ALL token embeddings
+                        # (incl. the a)/b)/c) and <tact_*> context), which may aid
+                        # localization/identification of the tactile blocks.
+                        param.requires_grad = True
+                    else:
+                        param.requires_grad = True
+                        # Only train new tokens (OUR FORK's restriction; NOT in original)
+                        def make_hook(n_old_tokens):
+                            def hook(grad):
+                                # Zero out gradients for the old tokens
+                                grad[:n_old_tokens] = 0
+                                return grad
+                            return hook
+                        # Register the hook
+                        n_old_tokens = len(tokenizer) - len(new_tokens)
+                        param.register_hook(make_hook(n_old_tokens))
                 if param.requires_grad:
                     llm_params.append(param)
         print(f"len(llm_params): {len(llm_params)}")
         print(f"len(project_params): {len(project_params)}")
         print(f"len(encoder_params): {len(encoder_params)}")
-        print(f"len(consistency_params): {len(consistency_params)}")
 
         optimizer_grouped_parameters = []
         if len(llm_params) > 0:
@@ -672,27 +690,47 @@ def train(configs, exp_name, g):
                 "params": encoder_params,
                 "lr": configs["encoder_lr"]
             })
-        if len(consistency_params) > 0:
-            optimizer_grouped_parameters.append({
-                "params": consistency_params,
-                "lr": configs.get("opd_consistency_lr", configs["llm_lr"])
-            })
 
+        optimizer_aux = None
         if len(optimizer_grouped_parameters) > 0:
-            optimizer_llm = torch.optim.AdamW(optimizer_grouped_parameters)
-            if configs["max_train_steps"] < len(train_loader):
-                num_training_steps = int(configs["max_train_steps"] / configs["llm_gradient_accumulation_steps"])
+            if configs.get("constant_projector_lr", False):
+                # ORIGINAL octopi: only the LLM/LoRA optimizer is cosine-scheduled. The
+                # projector (and encoder) go in a SEPARATE optimizer with NO scheduler =
+                # constant LR, so the from-scratch tactile->LLM projector is not starved.
+                llm_groups = [{"params": llm_params, "lr": configs["llm_lr"]}] if len(llm_params) > 0 else []
+                aux_groups = []
+                if len(project_params) > 0:
+                    aux_groups.append({"params": project_params, "lr": configs["projection_lr"]})
+                if len(encoder_params) > 0:
+                    aux_groups.append({"params": encoder_params, "lr": configs["encoder_lr"]})
+                optimizer_llm = torch.optim.AdamW(llm_groups) if llm_groups else torch.optim.AdamW(aux_groups)
+                optimizer_aux = torch.optim.AdamW(aux_groups) if (llm_groups and aux_groups) else None
             else:
-                num_training_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
+                optimizer_llm = torch.optim.AdamW(optimizer_grouped_parameters)
+            # Match ORIGINAL octopi: cosine T_max is the FULL-dataset optimizer-step count,
+            # not the truncated max_train_steps. With early stopping at max_train_steps the run
+            # only traverses the early (near-peak) portion of the cosine, so the LoRA LR stays
+            # near 2e-4 throughout instead of decaying to ~0 over the short run (which starved
+            # gradient updates: ~1.85x less total update than the original).
+            num_training_steps = int(len(train_loader) / configs["llm_gradient_accumulation_steps"])
             if configs["warmup_steps"] < 1:
                 num_warmup_steps = int(num_training_steps * configs["warmup_steps"])
             else:
                 num_warmup_steps = int(configs["warmup_steps"])
-            scheduler_llm = get_cosine_schedule_with_warmup(
-                optimizer_llm,
-                num_warmup_steps=num_warmup_steps,
-                num_training_steps=num_training_steps
-            )
+            if configs.get("lr_schedule", "cosine") == "constant":
+                # Constant LR after warmup (no decay), for ALL trainable groups. Intended for
+                # Stage 1, where the from-scratch projector + token embeddings are the only
+                # learners (base LLM frozen) so there is no moving-target concern -- sustaining
+                # the LR avoids starving the tactile interface (vs decaying it to ~0).
+                scheduler_llm = get_constant_schedule_with_warmup(
+                    optimizer_llm, num_warmup_steps=num_warmup_steps
+                )
+            else:
+                scheduler_llm = get_cosine_schedule_with_warmup(
+                    optimizer_llm,
+                    num_warmup_steps=num_warmup_steps,
+                    num_training_steps=num_training_steps
+                )
 
     # training
     if configs["train"]:
@@ -725,23 +763,13 @@ def train(configs, exp_name, g):
         # total_train_loss = 0
         # NOTE: do not calculate stats during training to save time
         for train_sample_step, batch in enumerate(t:=tqdm.tqdm(train_loader)):
-            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels = batch
+            question, answer_tokens, tactile_frames, tactile, question_type, question_step, all_indices = batch
             answer_tokens = answer_tokens.to(device)
-            conclusion_weight = get_conclusion_loss_weight(configs, question_type[0])
-            cs = conclusion_start if (configs.get("conclusion_only_loss", False) or conclusion_weight > 0) else None
-            consistency_weight = configs.get("opd_consistency_loss_weight", 0.0)
-            if not question_type[0].endswith("_object_property_description"):
-                consistency_weight = 0.0
             outputs, _ = model(
                 question=question,
                 tactile_frames=tactile_frames,
                 answer_tokens=answer_tokens,
                 all_indices=all_indices,
-                conclusion_start=cs,
-                conclusion_only=configs.get("conclusion_only_loss", False),
-                conclusion_loss_weight=conclusion_weight,
-                property_labels=property_labels,
-                consistency_loss_weight=consistency_weight,
             )
             train_loss = outputs.loss.detach().float()
             t.set_description(f"Train loss: {train_loss}")
@@ -758,11 +786,16 @@ def train(configs, exp_name, g):
                     optimizer_llm.step()
                     scheduler_llm.step()
                     optimizer_llm.zero_grad()
+                    if optimizer_aux is not None:
+                        # constant-LR projector/encoder optimizer (no scheduler step)
+                        optimizer_aux.step()
+                        optimizer_aux.zero_grad()
                     t.set_postfix(loss=train_loss.item(),
                                   llm_gn=llm_gn.item() if torch.is_tensor(llm_gn) else llm_gn,
                                   proj_gn=proj_gn.item() if torch.is_tensor(proj_gn) else proj_gn)
-                    # Ensure frozen token embeddings are not corrupted by AdamW weight decay or variance tracking
-                    if any("embed_tokens" in n for n, p in model.llm.named_parameters() if p.requires_grad):
+                    # Ensure frozen token embeddings are not corrupted by AdamW weight decay or variance tracking.
+                    # Skip when train_all_token_embeddings: we WANT the old tokens to move (original octopi behavior).
+                    if not configs.get("train_all_token_embeddings", False) and any("embed_tokens" in n for n, p in model.llm.named_parameters() if p.requires_grad):
                         with torch.no_grad():
                             model.llm.get_input_embeddings().weight.data[:n_old_tokens] = original_embeddings[:n_old_tokens]
 
@@ -872,7 +905,10 @@ def train(configs, exp_name, g):
             if configs.get("use_lora", False) and configs.get("tta_passes", 1) > 1:
                 run_evaluation_tta(model, configs["test_files"], image_processor, device, tokenizer, configs, exp_name, "test_best")
 
-        else:
+        elif not configs["train"]:
+            # Test-only mode: single eval pass on the loaded checkpoint.
+            # NOTE: when train=True but val=False there is no separate "best" checkpoint,
+            # so test_final above already covers it -- do NOT run a redundant second pass.
             run_evaluation(model, test_loader, device, tokenizer, configs, exp_name, "test_best")
             if configs.get("use_lora", False) and configs.get("tta_passes", 1) > 1:
                 run_evaluation_tta(model, configs["test_files"], image_processor, device, tokenizer, configs, exp_name, "test_best")

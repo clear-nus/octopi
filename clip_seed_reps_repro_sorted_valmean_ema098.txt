@@ -1,1 +1,0 @@
-[seed-reps] seed=1 clip_seed_1_repro_sorted_valmean_ema098 :: val_mean=0.638888888888889 test_mean=0.631578947368421 test_combined=0.3684210526315789

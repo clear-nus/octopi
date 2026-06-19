@@ -17,18 +17,6 @@ import re
 from utils.constants import *
 
 
-def get_property_labels_from_tactile_path(tactile_path):
-    sample_name = os.path.basename(tactile_path)
-    object_name = sample_name.rsplit("_", 1)[0]
-    if object_name not in RANKS["hardness"]:
-        return torch.tensor([-100, -100, -100], dtype=torch.long)
-    return torch.tensor([
-        RANKS["hardness"][object_name],
-        RANKS["roughness"][object_name],
-        RANKS["texture"][object_name],
-    ], dtype=torch.long)
-
-
 def _parse_candidate_chunk(chunk):
     match = re.match(r"^\s*\d\)\s*(.*?)(,\s*|\.\s*)?$", chunk)
     if match is None:
@@ -367,8 +355,9 @@ def get_frames(frames_path, image_processor, transforms_image, max_length=5, ski
 
 class CLIPPropertyUniqueDataset(Dataset):
     def __init__(self, image_processor, data_path, split_name, flip_p=0, max_frames=5,
-                 rotation_degrees=0, color_jitter=0.0, gaussian_blur=False):
+                 rotation_degrees=0, color_jitter=0.0, gaussian_blur=False, aux_target=None):
         super().__init__()
+        self.aux_target = aux_target  # None | "material" | "object" (CLIP-training aux head)
         self.rotation_degrees = rotation_degrees
         self.color_jitter = color_jitter
         self.gaussian_blur = gaussian_blur
@@ -418,7 +407,13 @@ class CLIPPropertyUniqueDataset(Dataset):
         hardness_label = RANKS["hardness"][objects]
         roughness_label = RANKS["roughness"][objects]
         texture_label = RANKS["texture"][objects]
-        return objects_tactile_frames, hardness_label, roughness_label, texture_label, all_indices
+        if self.aux_target == "material":
+            aux_label = MATERIAL_TO_ID[MATERIALS[objects]]
+        elif self.aux_target == "object":
+            aux_label = OBJECT_TO_ID[objects]
+        else:
+            aux_label = -1
+        return objects_tactile_frames, hardness_label, roughness_label, texture_label, aux_label, all_indices
     
     def __len__(self): 
         return len(self.objects)
@@ -443,8 +438,8 @@ class CLIPPropertyUniqueDataset(Dataset):
             transforms_image = transforms.Compose(transform_list)
         else:
             transforms_image = None
-        objects_tactile_frames, hardness_label, roughness_label, texture_label, all_indices = self.get_frames_and_label(index, transforms_image=transforms_image)
-        return objects_tactile_frames, hardness_label, roughness_label, texture_label, all_indices
+        objects_tactile_frames, hardness_label, roughness_label, texture_label, aux_label, all_indices = self.get_frames_and_label(index, transforms_image=transforms_image)
+        return objects_tactile_frames, hardness_label, roughness_label, texture_label, aux_label, all_indices
 
 
 class TactileLLMDataset(Dataset):
@@ -536,12 +531,6 @@ class TactileLLMDataset(Dataset):
         answer = "".join(sample[-1]["content"])
         # 2) get tokens
         answer_tokens = torch.tensor(self.tokenizer.encode(answer + f'{self.eos_token}'), dtype=torch.int64)[1:]
-        # Compute where "Conclusion: " starts in answer_tokens (0 if absent, e.g. OPD)
-        conclusion_start = 0
-        if "Conclusion: " in answer:
-            desc_part = answer[:answer.index("Conclusion: ")]
-            # encode() includes BOS; [1:] mirrors the [1:] slice on answer_tokens
-            conclusion_start = max(0, len(self.tokenizer.encode(desc_part)) - 1)
         # 3) get frame tensors
         all_tactile_frames = []
         all_indices = []
@@ -552,7 +541,4 @@ class TactileLLMDataset(Dataset):
                 frames, indices = get_frames(t, self.image_processor, transforms_image, max_length=self.max_frames, return_indices=True)
             all_tactile_frames.append(frames)
             all_indices.append(indices)
-        property_labels = torch.tensor([-100, -100, -100], dtype=torch.long)
-        if question_type.endswith("_object_property_description") and len(tactile) > 0:
-            property_labels = get_property_labels_from_tactile_path(tactile[0])
-        return question, answer_tokens, all_tactile_frames, tactile, question_type, question_step, all_indices, conclusion_start, property_labels
+        return question, answer_tokens, all_tactile_frames, tactile, question_type, question_step, all_indices

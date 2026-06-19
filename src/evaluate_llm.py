@@ -42,7 +42,8 @@ class LLMEvaluator:
                 if "eval_property_superlative_selection" not in self.results.keys():
                     self.results["eval_property_superlative_selection"] = {
                         "num": 0,
-                        "accuracy": 0
+                        "accuracy": 0,
+                        "slot_accuracy": 0
                     }
             elif question_type == "eval_property_object_match":
                 self.results[question_type] = {
@@ -86,6 +87,9 @@ class LLMEvaluator:
                 self.results[question_type]["slot_accuracy"] += result[1]
                 self.results[question_type]["canonical_accuracy"] += result[2]
                 self.results[question_type]["canonical_slot_accuracy"] += result[3]
+            elif question_type == "eval_property_superlative_selection" and isinstance(result, tuple):
+                self.results[question_type]["accuracy"] += result[0]
+                self.results[question_type]["slot_accuracy"] += result[1]
             else:
                 self.results[question_type]["accuracy"] += result
             self.results[question_type]["num"] += 1
@@ -132,10 +136,19 @@ class LLMEvaluator:
         answer_len = len(answer)
         if show:
             print("\nPSS:", generation, "||", answer)
-        if generation[:answer_len] == answer:
-            return 1
-        else:
-            return 0
+        full_correct = 1 if generation[:answer_len] == answer else 0
+        # slot-level: did the model pick the right option letter, ignoring phrasing?
+        answer_letter = self.parse_pss_letter(answer)
+        generation_letter = self.parse_pss_letter(generation)
+        slot_correct = 1 if (answer_letter is not None and answer_letter == generation_letter) else 0
+        return full_correct, slot_correct
+
+    def parse_pss_letter(self, text):
+        text = text.replace("</s>", "").strip()
+        match = re.search(r"\b([abc])\)", text, flags=re.IGNORECASE)
+        if match is not None:
+            return match.group(1).lower()
+        return None
     
     def evaluate_pom(self, question, generation, answer, show):
         answer = answer.split("Conclusion: ")[-1]
@@ -243,7 +256,8 @@ random_scores = {
         "canonical_slot_accuracy": 0.333
     },
     "eval_property_superlative_selection": {
-        "accuracy": 0.333
+        "accuracy": 0.333,
+        "slot_accuracy": 0.333
     },
     "eval_object_property_description": {
         "hardness_accuracy": 0.33,

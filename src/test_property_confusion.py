@@ -43,7 +43,7 @@ def collect_preds(vificlip, classifier, loader, device):
     preds = {p: [] for p in PROPS}
     labels = {p: [] for p in PROPS}
     for batch in loader:
-        otfs, h, r, t, all_indices = batch
+        otfs, h, r, t, _aux, all_indices = batch
         embeds = []
         for otf in otfs:
             vf, _, _, _ = vificlip(otf.to(device), None, None, all_indices)

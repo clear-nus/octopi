@@ -204,15 +204,16 @@ def average_state_dict_files(paths):
 def write_topk_averaged_checkpoint(configs, exp_name, topk_checkpoints):
     if not topk_checkpoints:
         return
-    ranked = sorted(topk_checkpoints, key=lambda x: x["val_mean"], reverse=True)
+    val_checkpoint_metric = configs.get("val_checkpoint_metric", "val_mean")
+    ranked = sorted(topk_checkpoints, key=lambda x: x[val_checkpoint_metric], reverse=True)
     paths = {
         "encoder": [c["encoder_path"] for c in ranked],
         "classifier": [c["classifier_path"] for c in ranked],
         "vificlip": [c["vificlip_path"] for c in ranked],
     }
-    print("Averaging top-k EMA checkpoints by val_mean:")
+    print(f"Averaging top-k EMA checkpoints by {val_checkpoint_metric}:")
     for rank, c in enumerate(ranked, start=1):
-        print(f"  rank={rank} epoch={c['epoch']} val_mean={c['val_mean']}")
+        print(f"  rank={rank} epoch={c['epoch']} {val_checkpoint_metric}={c[val_checkpoint_metric]}")
     torch.save(average_state_dict_files(paths["encoder"]), f"{configs['exps_path']}/{exp_name}/encoder.pt")
     torch.save(average_state_dict_files(paths["classifier"]), f"{configs['exps_path']}/{exp_name}/classifier.pt")
     torch.save(average_state_dict_files(paths["vificlip"]), f"{configs['exps_path']}/{exp_name}/vificlip.pt")
@@ -225,7 +226,7 @@ def evaluate_property_split(vificlip, classifier, loader, device, evaluator):
     classifier.eval()
     with torch.no_grad():
         for batch in tqdm.tqdm(loader):
-            objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, all_indices = batch
+            objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, aux_labels, all_indices = batch
             hardness_labels = hardness_labels.to(device)
             roughness_labels = roughness_labels.to(device)
             texture_labels = texture_labels.to(device)
@@ -267,8 +268,23 @@ def main(configs, exp_name, g, device):
         print(f"Failed to load CLIP ImageProcessor: {e}. Ensure you have internet access or the model is cached/downloaded.")
         raise
     max_frames = configs.get("max_frames", 5)
+    # Optional auxiliary representation-shaping head (CLIP-training only; discarded for LLM).
+    aux_target = configs.get("aux_classifier_target", None)
+    aux_loss_weight = float(configs.get("aux_loss_weight", 0.0) or 0.0)
+    aux_enabled = bool(aux_target) and aux_loss_weight > 0
+    if aux_enabled:
+        if aux_target == "material":
+            aux_classes = len(MATERIAL_TO_ID)
+        elif aux_target == "object":
+            aux_classes = len(OBJECT_TO_ID)
+        else:
+            raise ValueError(f"Unsupported aux_classifier_target: {aux_target} (use 'material' or 'object')")
+        print(f"Aux representation-shaping head ON (target={aux_target}, classes={aux_classes}, weight={aux_loss_weight})")
+    else:
+        aux_classes = 0
     train_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="train", flip_p=configs["flip_p"], max_frames=max_frames,
-        rotation_degrees=configs.get("rotation_degrees", 0), color_jitter=configs.get("color_jitter", 0.0), gaussian_blur=configs.get("gaussian_blur", False))
+        rotation_degrees=configs.get("rotation_degrees", 0), color_jitter=configs.get("color_jitter", 0.0), gaussian_blur=configs.get("gaussian_blur", False),
+        aux_target=aux_target if aux_enabled else None)
     val_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="val", max_frames=max_frames)
     test_dataset = CLIPPropertyUniqueDataset(image_processor=image_processor, data_path=configs["data_dir"], split_name="test", max_frames=max_frames)
     train_loader = DataLoader(train_dataset, batch_size=configs["batch_size"], shuffle=True, worker_init_fn=seed_worker, generator=g)
@@ -276,7 +292,7 @@ def main(configs, exp_name, g, device):
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g)
     # models
     encoder = CLIPTactileEncoder(clip_model=configs["use_clip"]).to(device)
-    classifier = CLIPClassifier(output_size=configs["output_size"], decoupled_heads=configs.get("decoupled_heads", False), decoupled_head_dim=configs.get("decoupled_head_dim", 128)).to(device)
+    classifier = CLIPClassifier(output_size=configs["output_size"], decoupled_heads=configs.get("decoupled_heads", False), decoupled_head_dim=configs.get("decoupled_head_dim", 128), aux_classes=aux_classes).to(device)
     if configs["prompt_learning"]:
         clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
     else:
@@ -353,10 +369,13 @@ def main(configs, exp_name, g, device):
         if ema is not None:
             print("WARNING: both EMA and SWA enabled; SWA takes precedence for eval/checkpoint.")
     best_val_acc = -1
+    val_checkpoint_metric = configs.get("val_checkpoint_metric", "val_mean")
+    if val_checkpoint_metric not in {"val_mean", "val_combined"}:
+        raise ValueError(f"Unsupported val_checkpoint_metric: {val_checkpoint_metric}")
     top_k_val_checkpoints = int(configs.get("top_k_val_checkpoints", 1) or 1)
     topk_checkpoints = []
     if top_k_val_checkpoints > 1:
-        print(f"Top-k val checkpoint averaging ON (k={top_k_val_checkpoints}, selector=val_mean)")
+        print(f"Top-k val checkpoint averaging ON (k={top_k_val_checkpoints}, selector={val_checkpoint_metric})")
     epochs = configs["num_epochs"]
     for epoch in tqdm.tqdm(range(epochs)):
         total_train_hardness_correct, total_train_roughness_correct, total_train_texture_correct, total_train_combined_correct = 0, 0, 0, 0
@@ -364,7 +383,7 @@ def main(configs, exp_name, g, device):
         vificlip.train()
         classifier.train()
         for train_batch_step, batch in enumerate(t:=tqdm.tqdm(train_loader)):
-            objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, all_indices = batch
+            objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, aux_labels, all_indices = batch
             hardness_labels, roughness_labels, texture_labels = hardness_labels.to(device), roughness_labels.to(device), texture_labels.to(device)
             batch_size = objects_tactile_frames[0].shape[0]
             all_tactile_embeds = []
@@ -374,6 +393,7 @@ def main(configs, exp_name, g, device):
             all_tactile_embeds = torch.cat(all_tactile_embeds, dim=-1) # (batch_size, output_size)
             hardness_preds, roughness_preds, texture_preds = classifier(all_tactile_embeds)
             ce_loss = ordinal_loss(hardness_preds, hardness_labels, smoothing=smoothing, weight=class_weights["hardness"]) + ordinal_loss(roughness_preds, roughness_labels, smoothing=smoothing, weight=class_weights["roughness"]) + ordinal_loss(texture_preds, texture_labels, smoothing=smoothing, weight=class_weights["texture"])
+            total_loss = ce_loss
             rank_w = configs.get("ranking_loss_weight", 0.0)
             if rank_w > 0:
                 margin = configs.get("ranking_margin", 1.0)
@@ -382,9 +402,13 @@ def main(configs, exp_name, g, device):
                     pairwise_ranking_loss(roughness_preds, roughness_labels, margin) +
                     pairwise_ranking_loss(texture_preds, texture_labels, margin)
                 )
-                loss = (ce_loss + rank_w * rank_loss) / configs["gradient_accumulation_steps"]
-            else:
-                loss = ce_loss / configs["gradient_accumulation_steps"]
+                total_loss = total_loss + rank_w * rank_loss
+            if aux_enabled:
+                aux_labels = aux_labels.to(device)
+                aux_preds = classifier.aux_forward(all_tactile_embeds)
+                aux_loss = F.cross_entropy(aux_preds, aux_labels)
+                total_loss = total_loss + aux_loss_weight * aux_loss
+            loss = total_loss / configs["gradient_accumulation_steps"]
             loss.backward()
             if (train_batch_step + 1) % configs["gradient_accumulation_steps"] == 0:
                 torch.nn.utils.clip_grad_norm_(vificlip.parameters(), max_norm=1.0)
@@ -422,7 +446,7 @@ def main(configs, exp_name, g, device):
         num_val_samples = 0
         with torch.no_grad():
             for val_sample_step, batch in enumerate(t:=tqdm.tqdm(val_loader)):
-                objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, all_indices = batch
+                objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, aux_labels, all_indices = batch
                 hardness_labels, roughness_labels, texture_labels = hardness_labels.to(device), roughness_labels.to(device), texture_labels.to(device)
                 batch_size = objects_tactile_frames[0].shape[0]
                 all_tactile_embeds = []
@@ -442,7 +466,7 @@ def main(configs, exp_name, g, device):
         num_test_samples = 0
         with torch.no_grad():
             for test_sample_step, batch in enumerate(t:=tqdm.tqdm(test_loader)):
-                objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, all_indices = batch
+                objects_tactile_frames, hardness_labels, roughness_labels, texture_labels, aux_labels, all_indices = batch
                 hardness_labels, roughness_labels, texture_labels = hardness_labels.to(device), roughness_labels.to(device), texture_labels.to(device)
                 batch_size = objects_tactile_frames[0].shape[0]
                 all_tactile_embeds = []
@@ -463,10 +487,13 @@ def main(configs, exp_name, g, device):
         print(f"VAL accuracies [hardness, roughness, texture, combined]: {total_val_hardness_correct / num_val_samples}, {total_val_roughness_correct / num_val_samples}, {total_val_texture_correct / num_val_samples}, {total_val_combined_correct / num_val_samples}")
         print(f"TEST accuracies [hardness, roughness, texture, combined]: {total_test_hardness_correct / num_test_samples}, {total_test_roughness_correct / num_test_samples}, {total_test_texture_correct / num_test_samples}, {total_test_combined_correct / num_test_samples}")
         val_mean_acc = (total_val_hardness_correct + total_val_roughness_correct + total_val_texture_correct) / (3 * num_val_samples)
+        val_combined_acc = total_val_combined_correct / num_val_samples
+        val_checkpoint_acc = val_mean_acc if val_checkpoint_metric == "val_mean" else val_combined_acc
         if top_k_val_checkpoints > 1:
             topk_checkpoints.append({
                 "epoch": epoch + 1,
                 "val_mean": float(val_mean_acc),
+                "val_combined": float(val_combined_acc),
             })
             ckpt = topk_checkpoints[-1]
             suffix = f"_topk_tmp_epoch_{ckpt['epoch']:03d}"
@@ -474,7 +501,7 @@ def main(configs, exp_name, g, device):
             ckpt["classifier_path"] = f"{configs['exps_path']}/{exp_name}/classifier{suffix}.pt"
             ckpt["vificlip_path"] = f"{configs['exps_path']}/{exp_name}/vificlip{suffix}.pt"
             save_clip_checkpoint(configs, exp_name, encoder, vificlip, classifier, suffix=suffix)
-            topk_checkpoints = sorted(topk_checkpoints, key=lambda x: x["val_mean"], reverse=True)
+            topk_checkpoints = sorted(topk_checkpoints, key=lambda x: x[val_checkpoint_metric], reverse=True)
             while len(topk_checkpoints) > top_k_val_checkpoints:
                 removed = topk_checkpoints.pop()
                 for path_key in ["encoder_path", "classifier_path", "vificlip_path"]:
@@ -482,10 +509,10 @@ def main(configs, exp_name, g, device):
                     if os.path.exists(path):
                         os.remove(path)
             kept_epochs = [c["epoch"] for c in topk_checkpoints]
-            print(f"Top-k val_mean checkpoints kept: {kept_epochs}")
-        if val_mean_acc > best_val_acc:
+            print(f"Top-k {val_checkpoint_metric} checkpoints kept: {kept_epochs}")
+        if val_checkpoint_acc > best_val_acc:
             print("Saving encoder...")
-            best_val_acc = val_mean_acc
+            best_val_acc = val_checkpoint_acc
             save_clip_checkpoint(configs, exp_name, encoder, vificlip, classifier)
         if avg is not None:
             avg.restore()
@@ -501,7 +528,7 @@ def main(configs, exp_name, g, device):
 
 if __name__ == "__main__":
     exp_type = f"train_clip"
-    config_path = f'configs/{exp_type}_config.yaml'
+    config_path = os.environ.get("TRAIN_CLIP_CONFIG", f'configs/{exp_type}_config.yaml')
     # get configs
     with open(config_path, 'r') as file:
         configs = yaml.safe_load(file)

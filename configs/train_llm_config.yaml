@@ -59,7 +59,6 @@ warmup_steps: 20
 val_freq: 150
 val_subset_size: null
 tta_passes: 1
-conclusion_only_loss: false
 per_device_val_batch_size: 1
 max_new_tokens:
   train_object_property_description: 100
@@ -74,10 +73,6 @@ max_new_tokens:
   eval_property_superlative_selection_least: 200
   eval_property_object_match: 200
   eval_property_scenario_reasoning: 200
-opd_consistency_loss_weight: 0.05
-opd_consistency_lr: 0.0001
-pom_conclusion_loss_weight: null
-conclusion_loss_task_groups: null
 pom_option_id_format: false
 pom_candidate_permutation_augmentation: 0
 multi_object_slot_permutation_augmentation: 0

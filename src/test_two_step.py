@@ -54,7 +54,7 @@ def process_user_input(user_input, image_processor, model, tokenizer, device):
             question_embeds.append(model.llm.get_input_embeddings()(torch.unsqueeze(torch.tensor(tokenizer.encode("<tact_start>"))[1:], 0).to(device)))
             frames, indices = get_frames(chunk[1:-1], image_processor, None, return_indices=True)
             tactile_tensors = torch.unsqueeze(frames, dim=0).to(device) # (1, l, c, h, w)
-            sinusoidal_embeds = sinusoidal_positional_embedding(token_sequence_size=5, indices=indices, token_embedding_dim=1024, batch_size=tactile_tensors.shape[0]).to(tactile_tensors.device)
+            sinusoidal_embeds = sinusoidal_positional_embedding(token_sequence_size=tactile_tensors.shape[1], indices=indices, token_embedding_dim=1024, batch_size=tactile_tensors.shape[0]).to(tactile_tensors.device)
             tactile_embeds = model.project(model.encoder(tactile_tensors) + sinusoidal_embeds)
             question_embeds.append(tactile_embeds)
             question_embeds.append(model.llm.get_input_embeddings()(torch.unsqueeze(torch.tensor(tokenizer.encode("<tact_end>"))[1:], 0).to(device)))
@@ -139,7 +139,9 @@ def main(configs, exp_name):
         except RuntimeError:
             clip = PromptLearningCLIPModel.from_pretrained(configs["use_clip"], configs).to(device)
             model.encoder.model.vision_model = clip.vision_model
-            model.encoder.load_state_dict(torch.load(configs["encoder_path"]), strict=False)
+            # strict=True so a depth/VPT mismatch errors loudly instead of silently
+            # loading a partially-uninitialized encoder (matches interact.py / train_llm.py)
+            model.encoder.load_state_dict(torch.load(configs["encoder_path"]), strict=True)
     if configs["projection_path"] is not None:
         # if there is a trained encoder specified
         model.project.load_state_dict(torch.load(configs["projection_path"]))

@@ -1,5 +1,4 @@
 TRAIN_OBJECTS = [
-    # Original: also included egg, blanket, pillow, basket, sponge_rough, rubber_slippers (moved to VAL_OBJECTS to increase val set size)
     'physiclear_scissor_handle', 'physiclear_rug', 'physiclear_strainer_base',
     'physiclear_toothbrush_handle', 'physiclear_scissor_blade', 'physiclear_tv_remote_back', 'physiclear_water_bottle', 'physiclear_controller_stick', 'physiclear_avocado_kinda_ripe',
     'physiclear_rubber_bands', 'physiclear_tomato', 'physiclear_tissue_ball', 'physiclear_mop_head',
@@ -21,8 +20,6 @@ TRAIN_OBJECTS = [
 # ]
 
 VAL_OBJECTS = [
-    # Original (7 objects): 'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap'
-    # Added from train to reduce checkpoint selection noise (13 objects total):
     'physiclear_tsa_lock_numbers', 'physiclear_millet', 'physiclear_nylon_shirt', 'physiclear_steel_wool', 'physiclear_feather_duster_handle', 'physiclear_denim', 'physiclear_bubble_wrap'
 ]
 
@@ -755,6 +752,15 @@ MATERIALS = {
     'physiclear_hairbrush_bristles': "fabric",
     'physiclear_hairbrush_bristles_side': "fabric",
 }
+
+
+# --- Auxiliary representation-shaping label maps ---
+# Used only as an optional auxiliary head during CLIP training to push the
+# encoder to separate objects that share the same (hardness, roughness, texture).
+# The classifier (property heads AND this aux head) is discarded for LLM
+# training/inference, so these never leak to the LLM. Sorted for determinism.
+MATERIAL_TO_ID = {m: i for i, m in enumerate(sorted(set(MATERIALS.values())))}
+OBJECT_TO_ID = {o: i for i, o in enumerate(sorted(set(TRAIN_OBJECTS + VAL_OBJECTS + TEST_OBJECTS)))}
 
 
 # 3) REASONING

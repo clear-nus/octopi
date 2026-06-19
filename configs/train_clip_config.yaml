@@ -1,6 +1,6 @@
-data_dir: /tmp/octopi_clip_frames8_depth24_gpu0/seed_1
-cuda: 0
-seed: 1
+data_dir: /tmp/octopi_clip_topk_remaining/seed_4
+cuda: 7
+seed: 4
 exps_path: exps
 flip_p: 0.5
 rotation_degrees: 0
@@ -16,11 +16,11 @@ gradient_accumulation_steps: 4
 output_size: 1024
 prompt_learning: true
 label_smoothing: 0.0
-max_frames: 8
+max_frames: 5
 unfreeze_last_n_layers: 0
 finetune_lr: 1.0e-05
 num_context_vision: 8
-prompt_depth_vision: 24
+prompt_depth_vision: 12
 dim_context_vision: 1024
 num_context_text: 6
 prompt_depth_text: 12
@@ -31,9 +31,14 @@ ranking_margin: 0.3
 class_balanced_loss: true
 class_balance_mode: scaled
 ema_decay: 0.98
-top_k_val_checkpoints: 1
+top_k_val_checkpoints: 3
 decoupled_heads: true
 decoupled_head_dim: 128
+# Auxiliary representation-shaping head during CLIP training only (discarded for LLM).
+# Pushes the encoder to separate objects sharing the same (hardness,roughness,texture).
+# null/0.0 = OFF (default). target: material | object
+aux_classifier_target: null
+aux_loss_weight: 0.0
 swa: false
 swa_start_epoch: 10
 class_balance_strength: 1.0
