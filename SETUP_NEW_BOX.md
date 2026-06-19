@@ -6,8 +6,10 @@ Operational companion to `HANDOFF.md` (which has the science/findings). This fil
 | item | size | how |
 |---|---|---|
 | repo code | ~35 MB | `git clone` the `fix` branch (fast via GitHub; use a FRESH token, the old one was exposed) |
-| **`dataset/`** (raw GelSight `.mov`) | **29 MB** | **must copy — NOT regenerable.** 476 `.mov` files, the only true source data |
-| chosen encoder `encoder.pt` (optional) | 1.2 GB | copy if you want to skip CLIP retrain; else retrain (§3) |
+| **`dataset/`** (raw GelSight `.mov`) | **29 MB** | **must copy — NOT regenerable.** 476 `.mov` files, the only true source data. THIS IS THE ONLY REQUIRED LARGE COPY. |
+| chosen encoder `encoder.pt` | 1.2 GB | **do NOT copy if upload is slow — retrain it locally in §3** (full recipe, ~equivalent quality). Copy only if you need this exact encoder byte-for-byte. |
+
+> You do not need to transfer `encoder.pt`. §3 retrains it from `dataset/`. A retrained encoder is equivalent quality (`test_mean ~0.72`) but not byte-identical (cross-machine nondeterminism) — irrelevant for the gold-weights eval (it uses the gold model's own encoder), minor variance only if continuing our LLM runs.
 | gold weights (original Octopi) | — | upload separately; this is the reason for the move |
 
 The 67 GB `exps/` does NOT need to move. `data/` and the `/tmp/*` processed dirs are regenerable (§2).
